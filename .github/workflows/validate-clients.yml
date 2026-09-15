@@ -1,0 +1,30 @@
+name: Validate client helper
+
+on:
+  push:
+    paths:
+      - clients.sh
+      - .github/workflows/validate-clients.yml
+  pull_request:
+    paths:
+      - clients.sh
+      - .github/workflows/validate-clients.yml
+
+permissions:
+  contents: read
+
+jobs:
+  shell:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Bash syntax
+        run: bash -n clients.sh
+      - name: ShellCheck
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y shellcheck
+          shellcheck --severity=error clients.sh
+      - name: Normalization self-test
+        run: bash clients.sh --self-test
