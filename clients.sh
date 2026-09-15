@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-VERSION="0.1.3-dev"
+VERSION="0.1.4-dev"
 XRAY_PORT=10000
 WS_PATH="/client/api/v2"
 STATE_DIR="/etc/vpn-node-installer"
