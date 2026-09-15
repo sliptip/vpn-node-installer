@@ -9,6 +9,7 @@ Client-creation workflow improvements.
 - `install.sh` now installs the helper as `/usr/local/sbin/vpn-clients` from this repository after a successful node install.
 - The installer offers to launch bulk client creation immediately; declining leaves the completed VPN installation untouched and the helper remains available for later use.
 - Added CI invariants for the new idle-input mode and post-install helper handoff.
+- Documented the official upstream 3x-ui repository (`MHSanaei/3x-ui`) and recorded **3x-ui v3.8.0** as the project's known-good tested baseline from the first successful clean-VPS deployment.
 
 ## 0.1.1-dev — 2026-09-15
 
