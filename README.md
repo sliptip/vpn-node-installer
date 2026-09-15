@@ -18,9 +18,9 @@ browser → https://domain/dashboard-<domain-name>/ → nginx Basic Auth → 127
 
 `<domain-name>` — имя непосредственно перед доменной зоной. Например:
 
-- `backup.fs-s.ru` → `/dashboard-fs-s/`, inbound `fs-s`
-- `r.reglament.net` → `/dashboard-reglament/`, inbound `reglament`
-- `w.kmv-m.ru` → `/dashboard-kmv-m/`, inbound `kmv-m`
+- `vpn.orion.example` → `/dashboard-orion/`, inbound `orion`
+- `edge.nimbus.example` → `/dashboard-nimbus/`, inbound `nimbus`
+- `relay.cobalt.example` → `/dashboard-cobalt/`, inbound `cobalt`
 
 ## Зафиксированные правила
 
