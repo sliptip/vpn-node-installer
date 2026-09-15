@@ -28,3 +28,8 @@ jobs:
           shellcheck --severity=error clients.sh
       - name: Normalization self-test
         run: bash clients.sh --self-test
+      - name: Input mode invariants
+        run: |
+          grep -Fq 'INPUT_IDLE_TIMEOUT="1.5"' clients.sh
+          grep -Fq 'read -r -t "$INPUT_IDLE_TIMEOUT"' clients.sh
+          ! grep -Fq 'введите точку' clients.sh
