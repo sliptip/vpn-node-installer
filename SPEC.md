@@ -113,6 +113,33 @@ The installer creates a neutral local SVG favicon with no external dependency.
 - `/favicon.ico` remains a fallback route
 - panel HTML is passed through nginx with an injected favicon link so the browser tab does not depend on 3x-ui's own icon behavior
 
+## Bulk client helper
+
+`clients.sh` is a separate post-install helper for nodes created by `install.sh`. It does not require the operator to upload a source file to the VPS.
+
+Input is pasted interactively into the SSH terminal and ends with a single `.` line. Accepted input forms are plain client names, full email addresses, or a one-column Markdown table.
+
+Normalization rules:
+
+- trim surrounding whitespace and simple Markdown table pipes
+- ignore blank lines, comment lines beginning with `#`, and Markdown separator rows
+- convert escaped `\@` to `@`
+- if an `@` exists, keep only the part to its left
+- lowercase the resulting name
+- accept only ASCII letters, digits, `.`, `_`, `+`, `-`
+- de-duplicate normalized names while preserving first-seen order
+- reject unsupported rows before any server change
+
+The effective 3x-ui client name is `<normalized-name>@<node-domain>`. The original email domain is intentionally discarded.
+
+The helper reads `DOMAIN`, `PANEL_PORT`, `PANEL_PATH`, and `INBOUND` from `/etc/vpn-node-installer/state.env`, authenticates only against the localhost 3x-ui API, resolves the VLESS inbound at port 10000, and uses the current first-class client API (`/panel/api/clients/bulkCreate`) rather than editing client rows directly.
+
+Existing clients with the same effective name are left untouched and reported during preview. New clients receive one independently generated UUID v4 each. Immediately before bulk creation the helper makes a root-only SQLite backup under `/etc/vpn-node-installer/backups/`.
+
+After creation, the helper verifies each new client's UUID and inbound attachment through the 3x-ui API and confirms that Xray still listens on `127.0.0.1:10000`.
+
+The final output block contains only ready-to-import VLESS URLs, one URL per line. Client names are present only in each URL fragment; there are no separate labels between URLs. The helper does not persist UUIDs or VLESS links in the installer log.
+
 ## Re-run policy
 
 A completed installation has `/etc/vpn-node-installer/installed` and `/etc/vpn-node-installer/state.env`.
@@ -152,4 +179,4 @@ Do not persist in `/var/log/vpn-node-installer.log`:
 - VLESS link
 - private TLS key contents
 
-The 3x-ui database and nginx htpasswd naturally contain operational credentials and remain root-protected system state.
+The 3x-ui database and nginx htpasswd naturally contain operational credentials and remain root-protected system state. Root-only SQLite backups made by `clients.sh` contain the same operational database data and must be protected accordingly.
