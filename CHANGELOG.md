@@ -11,6 +11,8 @@ Post-test fixes after the first successful end-to-end VPS deployment.
 - Added an explicit `/favicon.svg` route and favicon link for the neutral service page.
 - nginx injects the same favicon link into proxied 3x-ui HTML.
 - Added GitHub Actions validation for Bash syntax, ShellCheck errors and required installer invariants.
+- Added `clients.sh`: interactive bulk client creation from pasted names/email addresses, with normalization, duplicate skipping, backup, verification and one VLESS URL per output line.
+- Added a separate GitHub Actions validation workflow for `clients.sh`.
 
 ## 0.1.0-dev — 2026-09-15
 
