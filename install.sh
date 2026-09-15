@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-VERSION="0.1.0-dev"
+VERSION="0.1.1-dev"
 WS_PATH="/client/api/v2"
 XRAY_PORT=10000
 BASIC_USER="admin"
@@ -91,6 +91,20 @@ public_ipv4(){
   return 1
 }
 
+ssh_server_port(){
+  local p=""
+  if [[ -n "${SSH_CONNECTION:-}" ]]; then
+    p="${SSH_CONNECTION##* }"
+  fi
+  if [[ ! "$p" =~ ^[0-9]+$ ]] || ((p < 1 || p > 65535)); then
+    p=$(sshd -T 2>/dev/null | awk '/^port /{print $2; exit}' || true)
+  fi
+  if [[ ! "$p" =~ ^[0-9]+$ ]] || ((p < 1 || p > 65535)); then
+    p=22
+  fi
+  echo "$p"
+}
+
 existing_guard(){
   if [[ -f "$MARKER" ]]; then
     [[ -r "$STATE_FILE" ]] && . "$STATE_FILE"
@@ -177,11 +191,12 @@ install_packages(){
 }
 
 configure_ufw(){
-  info "Настраиваю UFW: 22/80/443"
+  local ssh_port="$1"
+  info "Настраиваю UFW: SSH=${ssh_port}/tcp, 80/tcp, 443/tcp"
   sed -i 's/^IPV6=.*/IPV6=no/' /etc/default/ufw
   ufw default deny incoming
   ufw default allow outgoing
-  ufw allow 22/tcp
+  ufw allow "${ssh_port}/tcp"
   ufw allow 80/tcp
   ufw allow 443/tcp
   ufw --force enable
@@ -255,9 +270,8 @@ write_assets(){
   info "Создаю сервисную страницу"
   install -d -m755 "$ACME_ROOT/.well-known/acme-challenge" "$WEB_ROOT" "$STATIC_ROOT"
   cat >"$WEB_ROOT/index.html" <<'HTML'
-<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex,nofollow"><title>Service endpoint</title><style>body{font-family:system-ui,sans-serif;max-width:44rem;margin:12vh auto;padding:0 1.5rem;color:#222}p{color:#666}</style></head><body><h1>Service endpoint</h1><p>The service is available.</p></body></html>
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex,nofollow"><link rel="icon" type="image/svg+xml" href="/favicon.svg"><title>Service endpoint</title><style>body{font-family:system-ui,sans-serif;max-width:44rem;margin:12vh auto;padding:0 1.5rem;color:#222}p{color:#666}</style></head><body><h1>Service endpoint</h1><p>The service is available.</p></body></html>
 HTML
-  # Tiny neutral SVG favicon: served as image/svg+xml via nginx.
   cat >"$STATIC_ROOT/favicon.svg" <<'SVG'
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="14" fill="#18212f"/><path d="M32 10 50 18v14c0 13-8 19-18 24C22 51 14 45 14 32V18z" fill="#3782f6"/><path d="m22 30 8 9 13-17" fill="none" stroke="#fff" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/></svg>
 SVG
@@ -275,6 +289,7 @@ server {
   server_tokens off;
   location ^~ /.well-known/acme-challenge/ { root $ACME_ROOT; default_type text/plain; try_files \$uri =404; }
   location = / { root $WEB_ROOT; try_files /index.html =404; }
+  location = /favicon.svg { alias $STATIC_ROOT/favicon.svg; default_type image/svg+xml; }
   location = /favicon.ico { alias $STATIC_ROOT/favicon.svg; default_type image/svg+xml; }
   location / { return 404; }
 }
@@ -327,16 +342,16 @@ api_token(){
 }
 
 create_inbound(){
-  local port="$1" path="$2" token="$3" name="$4" uuid="$5" api payload resp code ok
-  info "Создаю VLESS WS inbound и клиента default с UUID v4"
+  local port="$1" path="$2" token="$3" name="$4" uuid="$5" client="$6" api payload resp code ok
+  info "Создаю VLESS WS inbound и клиента $client с UUID v4"
   api="http://127.0.0.1:${port}${path}panel/api"
   code=$(curl -sS -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $token" "$api/server/status" || true)
   [[ "$code" == 200 ]] || die "Local API 3x-ui недоступен (HTTP $code)."
   payload=$(mktemp /root/vpn-node-inbound.XXXXXX.json); resp=$(mktemp /root/vpn-node-response.XXXXXX.json); chmod 600 "$payload" "$resp"
-  python3 - "$payload" "$name" "$uuid" <<'PY'
+  python3 - "$payload" "$name" "$uuid" "$client" <<'PY'
 import json,sys
-p,name,uid=sys.argv[1:]
-settings={"clients":[{"id":uid,"email":"default","flow":"","limitIp":0,"totalGB":0,"expiryTime":0,"enable":True,"tgId":0,"subId":"","comment":"","reset":0}],"decryption":"none","encryption":"none","fallbacks":[]}
+p,name,uid,client=sys.argv[1:]
+settings={"clients":[{"id":uid,"email":client,"flow":"","limitIp":0,"totalGB":0,"expiryTime":0,"enable":True,"tgId":0,"subId":"","comment":"","reset":0}],"decryption":"none","encryption":"none","fallbacks":[]}
 stream={"network":"ws","security":"none","wsSettings":{"acceptProxyProtocol":False,"path":"/client/api/v2","host":"","headers":{},"heartbeatPeriod":0},"sockopt":{"trustedXForwardedFor":["X-Real-IP"]}}
 obj={"up":0,"down":0,"total":0,"remark":name,"enable":True,"expiryTime":0,"trafficReset":"never","trafficResetDay":1,"lastTrafficResetTime":0,"listen":"127.0.0.1","port":10000,"protocol":"vless","settings":json.dumps(settings,separators=(',',':')),"streamSettings":json.dumps(stream,separators=(',',':')),"sniffing":json.dumps({"enabled":False}),"tag":"in-10000-tcp","shareAddrStrategy":"node","shareAddr":"","subSortIndex":1,"disableFlow":False}
 json.dump(obj,open(p,'w'),separators=(',',':'))
@@ -354,12 +369,12 @@ PY
   sleep 2
   ss -ltnH | awk '{print $4}' | grep -Eq "127\.0\.0\.1:${XRAY_PORT}$" || { systemctl restart x-ui; sleep 3; }
   ss -ltnH | awk '{print $4}' | grep -Eq "127\.0\.0\.1:${XRAY_PORT}$" || die "Xray не слушает 127.0.0.1:${XRAY_PORT}."
-  python3 - "$XUI_DB" "$uuid" <<'PY'
+  python3 - "$XUI_DB" "$uuid" "$client" <<'PY'
 import json,sqlite3,sys
 r=sqlite3.connect(sys.argv[1]).execute("SELECT settings FROM inbounds WHERE port=10000 AND protocol='vless' LIMIT 1").fetchone()
 if not r: raise SystemExit(1)
 c=json.loads(r[0]).get('clients') or []
-raise SystemExit(0 if any(x.get('id')==sys.argv[2] and x.get('email')=='default' for x in c) else 1)
+raise SystemExit(0 if any(x.get('id')==sys.argv[2] and x.get('email')==sys.argv[3] for x in c) else 1)
 PY
 }
 
@@ -390,6 +405,8 @@ server {
   ssl_protocols TLSv1.2 TLSv1.3;
   location ^~ /.well-known/acme-challenge/ { root $ACME_ROOT; default_type text/plain; try_files \$uri =404; }
   location = / { root $WEB_ROOT; try_files /index.html =404; }
+  location = /favicon.svg { alias $STATIC_ROOT/favicon.svg; default_type image/svg+xml; }
+  location = /favicon.ico { alias $STATIC_ROOT/favicon.svg; default_type image/svg+xml; }
   location ^~ $WS_PATH {
     proxy_pass http://127.0.0.1:$XRAY_PORT;
     proxy_http_version 1.1;
@@ -413,12 +430,14 @@ server {
     proxy_set_header X-Forwarded-Proto \$scheme;
     proxy_set_header Upgrade \$http_upgrade;
     proxy_set_header Connection "upgrade";
+    proxy_set_header Accept-Encoding "";
+    sub_filter_once on;
+    sub_filter '</head>' '<link rel="icon" type="image/svg+xml" href="/favicon.svg"></head>';
     proxy_read_timeout 300s;
   }
   location = /health { default_type application/json; return 200 '{"status":"ok"}'; }
   location = /version { default_type application/json; return 200 '{"service":"vpn-node","installer":"vpn-node-installer","version":"$VERSION"}'; }
   location = /robots.txt { default_type text/plain; return 200 "User-agent: *\nDisallow: /\n"; }
-  location = /favicon.ico { alias $STATIC_ROOT/favicon.svg; default_type image/svg+xml; }
   location / { return 404; }
 }
 EOF
@@ -440,22 +459,22 @@ final_checks(){
   ss -ltnH | awk '{print $4}' | grep -Eq '(^|:)2096$' && die "2096 слушает." || true
   h=$(curl -4fsS --max-time 15 "https://$d/health"); [[ "$h" == '{"status":"ok"}' ]] || die "/health неверный."
   code=$(curl -4ksS -o /dev/null -w '%{http_code}' --max-time 15 "https://$d$panel" || true); [[ "$code" == 401 ]] || die "Panel without Basic Auth: HTTP $code, expected 401."
-  code=$(curl -4ksS --http1.1 --connect-timeout 10 --max-time 5 -o /dev/null -w '%{http_code}' -H 'Connection: Upgrade' -H 'Upgrade: websocket' -H 'Sec-WebSocket-Version: 13' -H 'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==' "https://$d$WS_PATH" || true); [[ "$code" == 101 ]] || die "WS handshake: HTTP $code, expected 101."
+  code=$(curl -4ksS --http1.1 --connect-timeout 10 --max-time 2 -o /dev/null -w '%{http_code}' -H 'Connection: Upgrade' -H 'Upgrade: websocket' -H 'Sec-WebSocket-Version: 13' -H 'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==' "https://$d$WS_PATH" 2>/dev/null || true); [[ "$code" == 101 ]] || die "WS handshake: HTTP $code, expected 101."
   openssl x509 -in "/etc/letsencrypt/live/$d/fullchain.pem" -noout -subject -issuer -dates
   telegram_test
   certbot renew --dry-run
 }
 
 write_state(){
-  local d="$1" ip="$2" port="$3" panel="$4" name="$5"
+  local d="$1" ip="$2" port="$3" panel="$4" name="$5" client="$6"
   install -d -m700 "$STATE_DIR"
-  { printf 'INSTALLER_VERSION=%q\n' "$VERSION"; printf 'DOMAIN=%q\n' "$d"; printf 'PUBLIC_IPV4=%q\n' "$ip"; printf 'PANEL_PORT=%q\n' "$port"; printf 'PANEL_PATH=%q\n' "$panel"; printf 'INBOUND=%q\n' "$name"; } >"$STATE_FILE"
+  { printf 'INSTALLER_VERSION=%q\n' "$VERSION"; printf 'DOMAIN=%q\n' "$d"; printf 'PUBLIC_IPV4=%q\n' "$ip"; printf 'PANEL_PORT=%q\n' "$port"; printf 'PANEL_PATH=%q\n' "$panel"; printf 'INBOUND=%q\n' "$name"; printf 'CLIENT=%q\n' "$client"; } >"$STATE_FILE"
   chmod 600 "$STATE_FILE"; echo "$VERSION" >"$MARKER"; chmod 600 "$MARKER"
 }
 
 summary(){
-  local d="$1" ip="$2" panel="$3" name="$4" uuid="$5"
-  local link="vless://${uuid}@${d}:443?type=ws&encryption=none&security=tls&sni=${d}&host=${d}&path=%2Fclient%2Fapi%2Fv2&alpn=http%2F1.1#default"
+  local d="$1" ip="$2" panel="$3" name="$4" uuid="$5" client="$6"
+  local link="vless://${uuid}@${d}:443?type=ws&encryption=none&security=tls&sni=${d}&host=${d}&path=%2Fclient%2Fapi%2Fv2&alpn=http%2F1.1#${client}"
   cat <<EOF
 
 ======================================================================
@@ -465,7 +484,7 @@ IPv4       : $ip
 Панель     : https://$d$panel
 Basic Auth : $BASIC_USER / (ваш пароль)
 Inbound    : $name
-Клиент     : default
+Клиент     : $client
 WS path    : $WS_PATH
 Xray local : 127.0.0.1:$XRAY_PORT
 IPv6       : отключён
@@ -484,7 +503,7 @@ main(){
   command -v curl >/dev/null || { apt-get update; apt-get install -y curl ca-certificates python3; }
 
   echo "vpn-node-installer $VERSION"
-  local domain key panel_base panel_path panel_port xuser xpass bpass uuid ip token
+  local domain key panel_base panel_path panel_port xuser xpass bpass uuid ip token ssh_port client_name
   while true; do
     read -r -p "Домен узла (например vpn.example.ru): " domain
     domain=$(tr '[:upper:]' '[:lower:]' <<<"$domain" | tr -d '[:space:]')
@@ -494,35 +513,38 @@ main(){
   key=$(domain_key "$domain"); [[ -n "$key" ]] || die "Не удалось получить имя перед зоной."
   panel_base="dashboard-$key"; panel_path="/$panel_base/"
   panel_port=$(free_panel_port) || die "Нет свободного порта панели."
+  client_name="default@$domain"
   prompt_nonempty xuser "Логин 3x-ui: "
   prompt_secret xpass "Пароль 3x-ui"
   echo "Basic Auth логин: $BASIC_USER"
   prompt_secret bpass "Пароль Basic Auth"
   uuid=$(uuid_v4)
+  ssh_port=$(ssh_server_port)
 
-  info "Начинаю установку: domain=$domain panel=$panel_path inbound=$key"
+  info "Начинаю установку: domain=$domain panel=$panel_path inbound=$key client=$client_name"
   disable_ipv6
   telegram_test
   install_packages
   ip=$(public_ipv4) || die "Не удалось определить публичный IPv4."
   echo "Публичный IPv4: $ip"
-  configure_ufw
+  echo "Текущий SSH-порт: $ssh_port"
+  configure_ufw "$ssh_port"
   wait_dns "$domain" "$ip"
   write_assets
   write_http_nginx "$domain"
   issue_cert "$domain"
   install_3xui "$panel_port" "$panel_base" "$xuser" "$xpass"
   token=$(api_token)
-  create_inbound "$panel_port" "$panel_path" "$token" "$key" "$uuid"
+  create_inbound "$panel_port" "$panel_path" "$token" "$key" "$uuid" "$client_name"
   unset token
   rm -f /etc/x-ui/install-result.env
   basic_auth "$bpass"
   unset bpass xpass
   write_final_nginx "$domain" "$panel_port" "$panel_path"
   final_checks "$domain" "$panel_port" "$panel_path"
-  write_state "$domain" "$ip" "$panel_port" "$panel_path" "$key"
+  write_state "$domain" "$ip" "$panel_port" "$panel_path" "$key" "$client_name"
   log "Installation completed domain=$domain ip=$ip version=$VERSION"
-  summary "$domain" "$ip" "$panel_path" "$key" "$uuid"
+  summary "$domain" "$ip" "$panel_path" "$key" "$uuid" "$client_name"
 }
 
 main "$@"
