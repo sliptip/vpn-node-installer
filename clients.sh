@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-VERSION="0.1.2-dev"
+VERSION="0.1.3-dev"
 XRAY_PORT=10000
 WS_PATH="/client/api/v2"
 STATE_DIR="/etc/vpn-node-installer"
@@ -240,8 +240,8 @@ fi
 
 ((${#new_clients[@]} > 0)) || { printf '\nНовых клиентов нет.\n'; exit 0; }
 
-read -r -p "Добавить ${#new_clients[@]} клиент(ов)? [Y/n]: " answer
-[[ ! "$answer" =~ ^[Nn]$ ]] || { echo "Отменено."; exit 0; }
+read -r -p "Добавить ${#new_clients[@]} клиент(ов)? [y/N]: " answer
+[[ "$answer" =~ ^[Yy]$ ]] || { echo "Отменено."; exit 0; }
 
 backup_dir="$STATE_DIR/backups"
 install -d -m700 "$backup_dir"
