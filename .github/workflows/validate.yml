@@ -42,3 +42,12 @@ jobs:
           grep -Fq 'ssh_server_port' install.sh
           grep -Fq 'CLIENT_HELPER_BIN="/usr/local/sbin/vpn-clients"' install.sh
           grep -Fq 'offer_add_clients' install.sh
+          grep -Fq 'XUI_KNOWN_GOOD="v3.8.0"' install.sh
+          grep -Fq 'resolve_latest_xui_tag' install.sh
+          grep -Fq 'choose_xui_version' install.sh
+          grep -Fq 'xui_installer_url' install.sh
+          grep -Fq 'bash "$f" "$tag"' install.sh
+          grep -Fq 'xui_compatibility_gate' install.sh
+          grep -Fq 'cleanup_xui_fresh_attempt' install.sh
+          grep -Fq 'install_xui_with_fallback' install.sh
+          grep -Fq "printf 'XUI_VERSION=%q" install.sh
