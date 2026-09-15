@@ -40,3 +40,5 @@ jobs:
           grep -Fq 'location = /favicon.svg' install.sh
           grep -Fq 'sub_filter' install.sh
           grep -Fq 'ssh_server_port' install.sh
+          grep -Fq 'CLIENT_HELPER_BIN="/usr/local/sbin/vpn-clients"' install.sh
+          grep -Fq 'offer_add_clients' install.sh
