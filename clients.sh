@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-VERSION="0.1.0-dev"
+VERSION="0.1.2-dev"
 XRAY_PORT=10000
 WS_PATH="/client/api/v2"
 STATE_DIR="/etc/vpn-node-installer"
 STATE_FILE="$STATE_DIR/state.env"
 XUI_BIN="/usr/local/x-ui/x-ui"
 XUI_DB="/etc/x-ui/x-ui.db"
+INPUT_IDLE_TIMEOUT="1.5"
 
 umask 077
 
@@ -147,14 +148,19 @@ created_json="$tmp/created.json"
 
 printf 'vpn clients helper %s\n' "$VERSION"
 printf 'Узел: %s\n' "$DOMAIN"
-printf '\nВставьте имена или email, по одному на строку.\n'
-printf 'Можно вставить один столбец или Markdown-таблицу. Для завершения введите точку . на отдельной строке.\n\n'
+printf '\nВставьте весь список имён или email одним блоком, по одному на строку.\n'
+printf 'Можно вставить обычный столбец или Markdown-таблицу.\n'
+printf 'После последней строки нажмите Enter, если курсор остался на ней. Ввод завершится автоматически после %s сек без новых строк.\n\n' "$INPUT_IDLE_TIMEOUT"
 
 : >"$raw"
-while IFS= read -r line; do
-  [[ "$line" == "." ]] && break
+if ! IFS= read -r line; then
+  die "Не получено ни одной строки."
+fi
+printf '%s\n' "$line" >>"$raw"
+while IFS= read -r -t "$INPUT_IDLE_TIMEOUT" line; do
   printf '%s\n' "$line" >>"$raw"
 done
+printf '\nВвод завершён.\n'
 
 normalize_input "$raw" "$names" "$rejected"
 
