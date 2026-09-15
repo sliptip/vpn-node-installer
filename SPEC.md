@@ -46,8 +46,12 @@ IPv6 is disabled at runtime and persistently. UFW is configured with `IPV6=no`. 
 
 ## 3x-ui policy
 
-- official upstream `MHSanaei/3x-ui`
-- current upstream installer from `main`
+- official upstream repository: `https://github.com/MHSanaei/3x-ui`
+- upstream installer source: `https://raw.githubusercontent.com/MHSanaei/3x-ui/main/install.sh`
+- the project does not pin 3x-ui to a fixed release; the upstream installer resolves the current latest stable release at install time
+- known-good tested baseline: **3x-ui v3.8.0**
+- `v3.8.0` was used for the first successful clean-VPS end-to-end test on 2026-09-15
+- later stable releases are not treated as project-tested until they pass a separate clean deployment test
 - SQLite
 - panel internal SSL disabled because nginx terminates TLS
 - panel bound to `127.0.0.1`
