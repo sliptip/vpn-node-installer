@@ -50,18 +50,22 @@ IPv6 is disabled at runtime and persistently. UFW is configured with `IPV6=no`. 
 
 Official upstream repository: `https://github.com/MHSanaei/3x-ui`.
 
+Known-good emergency mirror: `https://github.com/sliptip/3x-ui`. The mirror preserves tag `v3.8.0` and the Linux amd64 release asset. The archived amd64 SHA-256 is `236b837627520f0c4ae4134dc6a34ea5e294b69e158879795fe8cd51c5f3582c`.
+
 The project keeps an explicit `XUI_KNOWN_GOOD` tag. It is currently **`v3.8.0`**, which was used for the first successful clean-VPS end-to-end test on 2026-09-15.
 
 Fresh-install version selection:
 
 1. Resolve the current GitHub latest stable release. Pre-release/dev tags are not candidates.
-2. If latest cannot be resolved, install known-good.
+2. If latest cannot be resolved, select known-good.
 3. If latest equals known-good, install it without another prompt.
 4. If latest is newer, offer:
    - try the newer stable with automatic fresh-install fallback to known-good;
    - install known-good immediately. This is the default when the operator presses Enter.
-5. A candidate's installer script is fetched from that exact release tag, not from floating `main`, and the same tag is passed to the upstream installer.
-6. A successful candidate on one node does not automatically change `XUI_KNOWN_GOOD` in the repository.
+5. A candidate's installer script is fetched from that exact release tag, not from floating `main`, and the same tag is passed to the installer.
+6. Newer candidates are attempted only from the official upstream. Known-good is attempted from official upstream first; if that fresh-install attempt fails, the installer cleans it and retries the exact `v3.8.0` from `sliptip/3x-ui`.
+7. Mirror mode rewrites the tagged upstream installer's repository/release URLs to `sliptip/3x-ui`, so its archived amd64 asset is actually used. The archived `.sha256` must contain the project's pinned known-good digest before mirror installation starts.
+8. A successful candidate on one node does not automatically change `XUI_KNOWN_GOOD` in the repository.
 
 ### 3x-ui compatibility gate
 
@@ -80,7 +84,7 @@ Before a selected release is accepted, the installer requires the 3x-ui pieces t
 
 If a newer candidate fails installation or this gate, the installer may fall back only while the node is still a **fresh install**. It stops/disables the failed x-ui service, removes the x-ui files/database created by that failed attempt, and performs a clean tagged install of known-good `v3.8.0`. It does not attempt to downgrade an already-used database in place.
 
-If known-good itself fails, installation stops rather than claiming success.
+If both official known-good and the verified `sliptip/3x-ui` mirror attempt fail, installation stops rather than claiming success. The mirror retry is also fresh-install-only; it is never used to downgrade an existing completed node.
 
 Existing completed nodes are never automatically upgraded or downgraded by this mechanism. The actual accepted tag is stored as `XUI_VERSION` in `/etc/vpn-node-installer/state.env` and printed in the final summary.
 

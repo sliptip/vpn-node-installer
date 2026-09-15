@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.1.5-dev — 2026-09-15
+
+Known-good 3x-ui source redundancy.
+
+- Added emergency mirror `sliptip/3x-ui` for known-good `v3.8.0` while keeping `MHSanaei/3x-ui` as the primary source.
+- If a fresh-install known-good attempt from the official source fails, x-ui state from that attempt is cleaned and the exact same `v3.8.0` is retried from the mirror.
+- Mirror mode redirects the tagged 3x-ui installer to the mirrored repository/release assets rather than silently falling back to the original release URL.
+- The archived Linux amd64 release checksum is pinned to `236b837627520f0c4ae4134dc6a34ea5e294b69e158879795fe8cd51c5f3582c` and checked before mirror installation.
+- Newer untested 3x-ui candidates continue to come only from official upstream; the mirror is a known-good emergency path, not a second latest channel.
+- `install.sh` and `clients.sh` now report `0.1.5-dev`; CI includes mirror-fallback invariants.
+
 ## 0.1.4-dev — 2026-09-15
 
 Safety and version-reporting fixes after the first live-node maintenance pass.

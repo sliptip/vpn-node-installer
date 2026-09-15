@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-VERSION="0.1.4-dev"
+VERSION="0.1.5-dev"
 WS_PATH="/client/api/v2"
 XRAY_PORT=10000
 BASIC_USER="admin"
@@ -16,9 +16,12 @@ WEB_ROOT="/var/www/vpn-node"
 STATIC_ROOT="/var/www/vpn-node-static"
 HTPASSWD="/etc/nginx/.htpasswd"
 XUI_UPSTREAM_REPO="MHSanaei/3x-ui"
+XUI_MIRROR_REPO="sliptip/3x-ui"
 XUI_KNOWN_GOOD="v3.8.0"
+XUI_KNOWN_GOOD_AMD64_SHA256="236b837627520f0c4ae4134dc6a34ea5e294b69e158879795fe8cd51c5f3582c"
 XUI_RELEASES_LATEST="https://github.com/MHSanaei/3x-ui/releases/latest"
 XUI_RAW_BASE="https://raw.githubusercontent.com/MHSanaei/3x-ui"
+XUI_MIRROR_RAW_BASE="https://raw.githubusercontent.com/sliptip/3x-ui"
 CLIENT_HELPER_URL="https://raw.githubusercontent.com/sliptip/vpn-node-installer/main/clients.sh"
 CLIENT_HELPER_BIN="/usr/local/sbin/vpn-clients"
 XUI_SELECTED_TAG="$XUI_KNOWN_GOOD"
@@ -390,17 +393,58 @@ HOOK
   systemctl enable --now certbot.timer
 }
 
-xui_installer_url(){ printf '%s/%s/install.sh\n' "$XUI_RAW_BASE" "$1"; }
+xui_installer_url(){
+  local tag="$1" source="$2" base
+  case "$source" in
+    upstream) base="$XUI_RAW_BASE" ;;
+    mirror) base="$XUI_MIRROR_RAW_BASE" ;;
+    *) return 1 ;;
+  esac
+  printf '%s/%s/install.sh\n' "$base" "$tag"
+}
+
+verify_xui_mirror_known_good(){
+  local sums expected
+  sums=$(mktemp /root/xui-mirror-sum.XXXXXX) || return 1
+  if ! curl -fsSL --connect-timeout 10 --max-time 60 \
+    "https://github.com/${XUI_MIRROR_REPO}/releases/download/${XUI_KNOWN_GOOD}/x-ui-linux-amd64.tar.gz.sha256" \
+    -o "$sums"; then
+    rm -f "$sums"
+    return 1
+  fi
+  expected=$(awk 'NR == 1 {print $1}' "$sums")
+  rm -f "$sums"
+  [[ "$expected" == "$XUI_KNOWN_GOOD_AMD64_SHA256" ]]
+}
+
+prepare_xui_installer_source(){
+  local f="$1" source="$2"
+  [[ "$source" == mirror ]] || return 0
+  sed -i \
+    -e "s#MHSanaei/3x-ui#${XUI_MIRROR_REPO}#g" \
+    -e "s#mhsanaei/3x-ui#${XUI_MIRROR_REPO}#g" \
+    "$f"
+}
 
 install_3xui_version(){
-  local tag="$1" port="$2" base="$3" user="$4" pass="$5" f url
-  info "Ставлю 3x-ui $tag"
-  url=$(xui_installer_url "$tag")
+  local tag="$1" port="$2" base="$3" user="$4" pass="$5" source="$6" f url repo
+  case "$source" in
+    upstream) repo="$XUI_UPSTREAM_REPO" ;;
+    mirror)
+      [[ "$tag" == "$XUI_KNOWN_GOOD" ]] || return 1
+      verify_xui_mirror_known_good || { warn "Mirror $XUI_MIRROR_REPO не прошёл проверку archived checksum для $XUI_KNOWN_GOOD."; return 1; }
+      repo="$XUI_MIRROR_REPO"
+      ;;
+    *) return 1 ;;
+  esac
+  info "Ставлю 3x-ui $tag из $repo"
+  url=$(xui_installer_url "$tag" "$source") || return 1
   f=$(mktemp /root/3x-ui-install.XXXXXX.sh) || return 1
   chmod 700 "$f"
   if ! curl -fsSL --connect-timeout 10 --max-time 60 "$url" -o "$f"; then
     rm -f "$f"; return 1
   fi
+  prepare_xui_installer_source "$f" "$source" || { rm -f "$f"; return 1; }
   if ! bash -n "$f"; then
     rm -f "$f"; return 1
   fi
@@ -421,7 +465,6 @@ install_3xui_version(){
     return 1
   fi
 }
-
 api_token(){
   local token=""
   if [[ -r /etc/x-ui/install-result.env ]]; then
@@ -541,37 +584,58 @@ cleanup_xui_fresh_attempt(){
 }
 
 install_xui_stack(){
-  local tag="$1" port="$2" base="$3" path="$4" user="$5" pass="$6" name="$7" uuid="$8" client="$9" token
-  install_3xui_version "$tag" "$port" "$base" "$user" "$pass" || return 1
+  local tag="$1" port="$2" base="$3" path="$4" user="$5" pass="$6" name="$7" uuid="$8" client="$9" source="${10}" token
+  install_3xui_version "$tag" "$port" "$base" "$user" "$pass" "$source" || return 1
   token=$(api_token) || return 1
   create_inbound "$port" "$path" "$token" "$name" "$uuid" "$client" || { unset token; return 1; }
   xui_compatibility_gate "$port" "$path" "$token" "$name" "$uuid" "$client" || { unset token; return 1; }
   unset token
 }
 
-install_xui_with_fallback(){
+install_known_good_with_source_fallback(){
   local port="$1" base="$2" path="$3" user="$4" pass="$5" name="$6" uuid="$7" client="$8"
-  local selected="$XUI_SELECTED_TAG"
 
-  if install_xui_stack "$selected" "$port" "$base" "$path" "$user" "$pass" "$name" "$uuid" "$client"; then
-    XUI_ACTIVE_TAG="$selected"
-    info "3x-ui $selected прошла compatibility gate"
+  if install_xui_stack "$XUI_KNOWN_GOOD" "$port" "$base" "$path" "$user" "$pass" "$name" "$uuid" "$client" upstream; then
+    XUI_ACTIVE_TAG="$XUI_KNOWN_GOOD"
+    info "3x-ui $XUI_KNOWN_GOOD прошла compatibility gate из официального $XUI_UPSTREAM_REPO"
     return 0
   fi
 
-  if ((XUI_FALLBACK_ENABLED)) && [[ "$selected" != "$XUI_KNOWN_GOOD" ]]; then
-    warn "3x-ui $selected не прошла установку/compatibility gate. Выполняю автоматический fallback на $XUI_KNOWN_GOOD."
-    cleanup_xui_fresh_attempt || return 1
-    if install_xui_stack "$XUI_KNOWN_GOOD" "$port" "$base" "$path" "$user" "$pass" "$name" "$uuid" "$client"; then
-      XUI_ACTIVE_TAG="$XUI_KNOWN_GOOD"
-      info "Fallback успешен: 3x-ui $XUI_KNOWN_GOOD"
-      return 0
-    fi
+  warn "Официальная попытка $XUI_KNOWN_GOOD не удалась. Пробую сохранённый mirror $XUI_MIRROR_REPO."
+  cleanup_xui_fresh_attempt || return 1
+  if install_xui_stack "$XUI_KNOWN_GOOD" "$port" "$base" "$path" "$user" "$pass" "$name" "$uuid" "$client" mirror; then
+    XUI_ACTIVE_TAG="$XUI_KNOWN_GOOD"
+    info "Mirror fallback успешен: 3x-ui $XUI_KNOWN_GOOD из $XUI_MIRROR_REPO"
+    return 0
   fi
 
   return 1
 }
 
+install_xui_with_fallback(){
+  local port="$1" base="$2" path="$3" user="$4" pass="$5" name="$6" uuid="$7" client="$8"
+  local selected="$XUI_SELECTED_TAG"
+
+  if [[ "$selected" == "$XUI_KNOWN_GOOD" ]]; then
+    install_known_good_with_source_fallback "$port" "$base" "$path" "$user" "$pass" "$name" "$uuid" "$client"
+    return
+  fi
+
+  if install_xui_stack "$selected" "$port" "$base" "$path" "$user" "$pass" "$name" "$uuid" "$client" upstream; then
+    XUI_ACTIVE_TAG="$selected"
+    info "3x-ui $selected прошла compatibility gate из официального $XUI_UPSTREAM_REPO"
+    return 0
+  fi
+
+  if ((XUI_FALLBACK_ENABLED)); then
+    warn "3x-ui $selected не прошла установку/compatibility gate. Выполняю fresh-install fallback на $XUI_KNOWN_GOOD."
+    cleanup_xui_fresh_attempt || return 1
+    install_known_good_with_source_fallback "$port" "$base" "$path" "$user" "$pass" "$name" "$uuid" "$client"
+    return
+  fi
+
+  return 1
+}
 basic_auth(){
   local pass="$1"
   info "Создаю Basic Auth user=$BASIC_USER"
