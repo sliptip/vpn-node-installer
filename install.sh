@@ -40,6 +40,7 @@ need_root(){ [[ ${EUID:-$(id -u)} -eq 0 ]] || die "Запустите скрип
 need_tty(){ [[ -t 0 && -t 1 ]] || die "Эта dev-версия рассчитана на интерактивный SSH-сеанс."; }
 
 check_os(){
+  local VERSION=""
   . /etc/os-release
   [[ "${ID:-}" == ubuntu && "${VERSION_ID:-}" == 24.04* ]] || die "Поддерживается только Ubuntu 24.04 LTS."
   [[ "$(uname -m)" == x86_64 ]] || die "Поддерживается только x86_64/amd64."
