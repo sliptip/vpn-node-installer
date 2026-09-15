@@ -30,6 +30,7 @@ jobs:
         run: bash clients.sh --self-test
       - name: Input and confirmation invariants
         run: |
+          grep -Fq 'VERSION="0.1.4-dev"' clients.sh
           grep -Fq 'INPUT_IDLE_TIMEOUT="1.5"' clients.sh
           grep -Fq 'read -r -t "$INPUT_IDLE_TIMEOUT"' clients.sh
           ! grep -Fq 'введите точку' clients.sh
