@@ -1,0 +1,286 @@
+name: Apply 0.1.5-dev 3x-ui mirror fallback
+
+on:
+  push:
+    paths:
+      - ".github/workflows/apply-0.1.5-mirror-fallback.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Apply deterministic edits
+        run: |
+          python3 <<'PY'
+          from pathlib import Path
+
+          def replace_once(text, old, new, label):
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"{label}: expected exactly 1 match, got {count}")
+              return text.replace(old, new, 1)
+
+          p = Path("install.sh")
+          s = p.read_text()
+          s = replace_once(s, 'VERSION="0.1.4-dev"', 'VERSION="0.1.5-dev"', 'installer version')
+
+          old = '''XUI_UPSTREAM_REPO="MHSanaei/3x-ui"
+          XUI_KNOWN_GOOD="v3.8.0"
+          XUI_RELEASES_LATEST="https://github.com/MHSanaei/3x-ui/releases/latest"
+          XUI_RAW_BASE="https://raw.githubusercontent.com/MHSanaei/3x-ui"
+          '''
+          new = '''XUI_UPSTREAM_REPO="MHSanaei/3x-ui"
+          XUI_MIRROR_REPO="sliptip/3x-ui"
+          XUI_KNOWN_GOOD="v3.8.0"
+          XUI_KNOWN_GOOD_AMD64_SHA256="236b837627520f0c4ae4134dc6a34ea5e294b69e158879795fe8cd51c5f3582c"
+          XUI_RELEASES_LATEST="https://github.com/MHSanaei/3x-ui/releases/latest"
+          XUI_RAW_BASE="https://raw.githubusercontent.com/MHSanaei/3x-ui"
+          XUI_MIRROR_RAW_BASE="https://raw.githubusercontent.com/sliptip/3x-ui"
+          '''
+          s = replace_once(s, old, new, 'xui constants')
+
+          start = s.index('xui_installer_url(){')
+          end = s.index('\napi_token(){', start)
+          new_block = r'''xui_installer_url(){
+            local tag="$1" source="$2" base
+            case "$source" in
+              upstream) base="$XUI_RAW_BASE" ;;
+              mirror) base="$XUI_MIRROR_RAW_BASE" ;;
+              *) return 1 ;;
+            esac
+            printf '%s/%s/install.sh\n' "$base" "$tag"
+          }
+
+          verify_xui_mirror_known_good(){
+            local sums expected
+            sums=$(mktemp /root/xui-mirror-sum.XXXXXX) || return 1
+            if ! curl -fsSL --connect-timeout 10 --max-time 60 \
+              "https://github.com/${XUI_MIRROR_REPO}/releases/download/${XUI_KNOWN_GOOD}/x-ui-linux-amd64.tar.gz.sha256" \
+              -o "$sums"; then
+              rm -f "$sums"
+              return 1
+            fi
+            expected=$(awk 'NR == 1 {print $1}' "$sums")
+            rm -f "$sums"
+            [[ "$expected" == "$XUI_KNOWN_GOOD_AMD64_SHA256" ]]
+          }
+
+          prepare_xui_installer_source(){
+            local f="$1" source="$2"
+            [[ "$source" == mirror ]] || return 0
+            sed -i \
+              -e "s#MHSanaei/3x-ui#${XUI_MIRROR_REPO}#g" \
+              -e "s#mhsanaei/3x-ui#${XUI_MIRROR_REPO}#g" \
+              "$f"
+          }
+
+          install_3xui_version(){
+            local tag="$1" port="$2" base="$3" user="$4" pass="$5" source="$6" f url repo
+            case "$source" in
+              upstream) repo="$XUI_UPSTREAM_REPO" ;;
+              mirror)
+                [[ "$tag" == "$XUI_KNOWN_GOOD" ]] || return 1
+                verify_xui_mirror_known_good || { warn "Mirror $XUI_MIRROR_REPO не прошёл проверку archived checksum для $XUI_KNOWN_GOOD."; return 1; }
+                repo="$XUI_MIRROR_REPO"
+                ;;
+              *) return 1 ;;
+            esac
+            info "Ставлю 3x-ui $tag из $repo"
+            url=$(xui_installer_url "$tag" "$source") || return 1
+            f=$(mktemp /root/3x-ui-install.XXXXXX.sh) || return 1
+            chmod 700 "$f"
+            if ! curl -fsSL --connect-timeout 10 --max-time 60 "$url" -o "$f"; then
+              rm -f "$f"; return 1
+            fi
+            prepare_xui_installer_source "$f" "$source" || { rm -f "$f"; return 1; }
+            if ! bash -n "$f"; then
+              rm -f "$f"; return 1
+            fi
+            if ! XUI_NONINTERACTIVE=1 XUI_DB_TYPE=sqlite XUI_USERNAME="$user" XUI_PASSWORD="$pass" XUI_PANEL_PORT="$port" XUI_WEB_BASE_PATH="$base" XUI_SSL_MODE=none bash "$f" "$tag"; then
+              rm -f "$f"; return 1
+            fi
+            rm -f "$f"
+            [[ -x "$XUI_BIN" && -f "$XUI_DB" ]] || return 1
+            "$XUI_BIN" setting -listenIP 127.0.0.1 >/dev/null || return 1
+            "$XUI_BIN" setting -webBasePath "/$base/" >/dev/null || return 1
+            systemctl stop x-ui || return 1
+            sqlite3 "$XUI_DB" "INSERT OR IGNORE INTO settings(key,value) VALUES('subEnable','false'); UPDATE settings SET value='false' WHERE key='subEnable';" || return 1
+            systemctl start x-ui || return 1
+            sleep 3
+            [[ "$(sqlite3 "$XUI_DB" "SELECT value FROM settings WHERE key='webListen' LIMIT 1;")" == 127.0.0.1 ]] || return 1
+            [[ "$(sqlite3 "$XUI_DB" "SELECT value FROM settings WHERE key='webPort' LIMIT 1;")" == "$port" ]] || return 1
+            if ss -ltnH | awk '{print $4}' | grep -Eq '(^|:)2096$'; then
+              return 1
+            fi
+          }
+          '''.strip()
+          s = s[:start] + new_block + s[end:]
+
+          start = s.index('install_xui_stack(){')
+          end = s.index('\nbasic_auth(){', start)
+          new_block = r'''install_xui_stack(){
+            local tag="$1" port="$2" base="$3" path="$4" user="$5" pass="$6" name="$7" uuid="$8" client="$9" source="${10}" token
+            install_3xui_version "$tag" "$port" "$base" "$user" "$pass" "$source" || return 1
+            token=$(api_token) || return 1
+            create_inbound "$port" "$path" "$token" "$name" "$uuid" "$client" || { unset token; return 1; }
+            xui_compatibility_gate "$port" "$path" "$token" "$name" "$uuid" "$client" || { unset token; return 1; }
+            unset token
+          }
+
+          install_known_good_with_source_fallback(){
+            local port="$1" base="$2" path="$3" user="$4" pass="$5" name="$6" uuid="$7" client="$8"
+
+            if install_xui_stack "$XUI_KNOWN_GOOD" "$port" "$base" "$path" "$user" "$pass" "$name" "$uuid" "$client" upstream; then
+              XUI_ACTIVE_TAG="$XUI_KNOWN_GOOD"
+              info "3x-ui $XUI_KNOWN_GOOD прошла compatibility gate из официального $XUI_UPSTREAM_REPO"
+              return 0
+            fi
+
+            warn "Официальная попытка $XUI_KNOWN_GOOD не удалась. Пробую сохранённый mirror $XUI_MIRROR_REPO."
+            cleanup_xui_fresh_attempt || return 1
+            if install_xui_stack "$XUI_KNOWN_GOOD" "$port" "$base" "$path" "$user" "$pass" "$name" "$uuid" "$client" mirror; then
+              XUI_ACTIVE_TAG="$XUI_KNOWN_GOOD"
+              info "Mirror fallback успешен: 3x-ui $XUI_KNOWN_GOOD из $XUI_MIRROR_REPO"
+              return 0
+            fi
+
+            return 1
+          }
+
+          install_xui_with_fallback(){
+            local port="$1" base="$2" path="$3" user="$4" pass="$5" name="$6" uuid="$7" client="$8"
+            local selected="$XUI_SELECTED_TAG"
+
+            if [[ "$selected" == "$XUI_KNOWN_GOOD" ]]; then
+              install_known_good_with_source_fallback "$port" "$base" "$path" "$user" "$pass" "$name" "$uuid" "$client"
+              return
+            fi
+
+            if install_xui_stack "$selected" "$port" "$base" "$path" "$user" "$pass" "$name" "$uuid" "$client" upstream; then
+              XUI_ACTIVE_TAG="$selected"
+              info "3x-ui $selected прошла compatibility gate из официального $XUI_UPSTREAM_REPO"
+              return 0
+            fi
+
+            if ((XUI_FALLBACK_ENABLED)); then
+              warn "3x-ui $selected не прошла установку/compatibility gate. Выполняю fresh-install fallback на $XUI_KNOWN_GOOD."
+              cleanup_xui_fresh_attempt || return 1
+              install_known_good_with_source_fallback "$port" "$base" "$path" "$user" "$pass" "$name" "$uuid" "$client"
+              return
+            fi
+
+            return 1
+          }
+          '''.strip()
+          s = s[:start] + new_block + s[end:]
+          p.write_text(s)
+
+          p = Path("clients.sh")
+          s = p.read_text()
+          s = replace_once(s, 'VERSION="0.1.4-dev"', 'VERSION="0.1.5-dev"', 'client version')
+          p.write_text(s)
+
+          p = Path(".github/workflows/validate.yml")
+          s = p.read_text()
+          s = replace_once(s, "grep -Fq 'VERSION=\"0.1.4-dev\"' install.sh", "grep -Fq 'VERSION=\"0.1.5-dev\"' install.sh", 'installer CI version')
+          anchor = "          grep -Fq 'XUI_KNOWN_GOOD=\"v3.8.0\"' install.sh\n"
+          extra = anchor + "          grep -Fq 'XUI_MIRROR_REPO=\"sliptip/3x-ui\"' install.sh\n          grep -Fq 'XUI_KNOWN_GOOD_AMD64_SHA256=\"236b837627520f0c4ae4134dc6a34ea5e294b69e158879795fe8cd51c5f3582c\"' install.sh\n          grep -Fq 'verify_xui_mirror_known_good' install.sh\n          grep -Fq 'prepare_xui_installer_source' install.sh\n          grep -Fq 'install_known_good_with_source_fallback' install.sh\n"
+          s = replace_once(s, anchor, extra, 'installer CI mirror invariants')
+          p.write_text(s)
+
+          p = Path(".github/workflows/validate-clients.yml")
+          s = p.read_text()
+          s = replace_once(s, "grep -Fq 'VERSION=\"0.1.4-dev\"' clients.sh", "grep -Fq 'VERSION=\"0.1.5-dev\"' clients.sh", 'client CI version')
+          p.write_text(s)
+
+          p = Path("README.md")
+          s = p.read_text()
+          s = replace_once(s, 'Текущая версия: **0.1.4-dev**.', 'Текущая версия: **0.1.5-dev**.', 'README version')
+          old = '`0.1.3-dev` — безопасный выбор версии 3x-ui и fresh-install fallback, а `0.1.4-dev` — безопасное подтверждение массового добавления клиентов и корректное сохранение версии установщика.'
+          new = '`0.1.3-dev` — безопасный выбор версии 3x-ui и fresh-install fallback, `0.1.4-dev` — безопасное подтверждение массового добавления клиентов и корректное сохранение версии установщика, а `0.1.5-dev` — резервный known-good источник `sliptip/3x-ui` на случай недоступности официального upstream.'
+          s = replace_once(s, old, new, 'README history')
+          anchor = 'Простой `Enter` выбирает безопасный вариант 2. Если latest определить не удалось, также используется `v3.8.0`.\n\n'
+          addition = anchor + 'Для known-good `v3.8.0` есть независимая резервная копия в `https://github.com/sliptip/3x-ui`: тот же tag/commit и архивированный amd64 release asset. Установщик всегда сначала пробует официальный `MHSanaei/3x-ui`; если fresh-install попытка known-good из официального источника не удаётся, состояние этой попытки очищается и `v3.8.0` повторяется из `sliptip/3x-ui`. Перед mirror-установкой проверяется сохранённый SHA-256 `236b837627520f0c4ae4134dc6a34ea5e294b69e158879795fe8cd51c5f3582c`.\n\n'
+          s = replace_once(s, anchor, addition, 'README mirror policy')
+          s = replace_once(s, '- 3x-ui upstream — официальный `MHSanaei/3x-ui`; current known-good — `v3.8.0`.', '- 3x-ui upstream — официальный `MHSanaei/3x-ui`; current known-good — `v3.8.0`; аварийный mirror known-good — `sliptip/3x-ui`.', 'README fixed rule')
+          s = s.replace('Пока `0.1.4-dev` не прошла', 'Пока `0.1.5-dev` не прошла', 1)
+          s = replace_once(s, '`.github/workflows/validate.yml` проверяет `install.sh`, включая invariants для known-good/fallback/compatibility gate и сохранения собственной версии установщика.', '`.github/workflows/validate.yml` проверяет `install.sh`, включая invariants для known-good/fallback/compatibility gate, резервного `sliptip/3x-ui` и сохранения собственной версии установщика.', 'README CI')
+          p.write_text(s)
+
+          p = Path("SPEC.md")
+          s = p.read_text()
+          anchor = 'Official upstream repository: `https://github.com/MHSanaei/3x-ui`.\n\n'
+          addition = anchor + 'Known-good emergency mirror: `https://github.com/sliptip/3x-ui`. The mirror preserves tag `v3.8.0` and the Linux amd64 release asset. The archived amd64 SHA-256 is `236b837627520f0c4ae4134dc6a34ea5e294b69e158879795fe8cd51c5f3582c`.\n\n'
+          s = replace_once(s, anchor, addition, 'SPEC mirror source')
+          old = '''2. If latest cannot be resolved, install known-good.
+          3. If latest equals known-good, install it without another prompt.
+          4. If latest is newer, offer:
+             - try the newer stable with automatic fresh-install fallback to known-good;
+             - install known-good immediately. This is the default when the operator presses Enter.
+          5. A candidate's installer script is fetched from that exact release tag, not from floating `main`, and the same tag is passed to the upstream installer.
+          6. A successful candidate on one node does not automatically change `XUI_KNOWN_GOOD` in the repository.
+          '''
+          new = '''2. If latest cannot be resolved, select known-good.
+          3. If latest equals known-good, install it without another prompt.
+          4. If latest is newer, offer:
+             - try the newer stable with automatic fresh-install fallback to known-good;
+             - install known-good immediately. This is the default when the operator presses Enter.
+          5. A candidate's installer script is fetched from that exact release tag, not from floating `main`, and the same tag is passed to the installer.
+          6. Newer candidates are attempted only from the official upstream. Known-good is attempted from official upstream first; if that fresh-install attempt fails, the installer cleans it and retries the exact `v3.8.0` from `sliptip/3x-ui`.
+          7. Mirror mode rewrites the tagged upstream installer's repository/release URLs to `sliptip/3x-ui`, so its archived amd64 asset is actually used. The archived `.sha256` must contain the project's pinned known-good digest before mirror installation starts.
+          8. A successful candidate on one node does not automatically change `XUI_KNOWN_GOOD` in the repository.
+          '''
+          s = replace_once(s, old, new, 'SPEC selection steps')
+          old = 'If known-good itself fails, installation stops rather than claiming success.\n'
+          new = 'If both official known-good and the verified `sliptip/3x-ui` mirror attempt fail, installation stops rather than claiming success. The mirror retry is also fresh-install-only; it is never used to downgrade an existing completed node.\n'
+          s = replace_once(s, old, new, 'SPEC known-good failure')
+          p.write_text(s)
+
+          p = Path("CHANGELOG.md")
+          s = p.read_text()
+          head = '# Changelog\n\n'
+          entry = '''## 0.1.5-dev — 2026-09-15
+
+          Known-good 3x-ui source redundancy.
+
+          - Added emergency mirror `sliptip/3x-ui` for known-good `v3.8.0` while keeping `MHSanaei/3x-ui` as the primary source.
+          - If a fresh-install known-good attempt from the official source fails, x-ui state from that attempt is cleaned and the exact same `v3.8.0` is retried from the mirror.
+          - Mirror mode redirects the tagged 3x-ui installer to the mirrored repository/release assets rather than silently falling back to the original release URL.
+          - The archived Linux amd64 release checksum is pinned to `236b837627520f0c4ae4134dc6a34ea5e294b69e158879795fe8cd51c5f3582c` and checked before mirror installation.
+          - Newer untested 3x-ui candidates continue to come only from official upstream; the mirror is a known-good emergency path, not a second latest channel.
+          - `install.sh` and `clients.sh` now report `0.1.5-dev`; CI includes mirror-fallback invariants.
+
+          '''
+          if not s.startswith(head):
+              raise SystemExit('CHANGELOG header mismatch')
+          s = head + entry + s[len(head):]
+          p.write_text(s)
+          PY
+
+      - name: Syntax and invariant checks
+        run: |
+          bash -n install.sh
+          bash -n clients.sh
+          grep -Fq 'VERSION="0.1.5-dev"' install.sh
+          grep -Fq 'VERSION="0.1.5-dev"' clients.sh
+          grep -Fq 'XUI_MIRROR_REPO="sliptip/3x-ui"' install.sh
+          grep -Fq 'verify_xui_mirror_known_good' install.sh
+          grep -Fq 'install_known_good_with_source_fallback' install.sh
+          grep -Fq '236b837627520f0c4ae4134dc6a34ea5e294b69e158879795fe8cd51c5f3582c' install.sh
+
+      - name: Commit changes
+        run: |
+          git config user.name "sliptip"
+          git config user.email "70051262+sliptip@users.noreply.github.com"
+          git add install.sh clients.sh README.md SPEC.md CHANGELOG.md .github/workflows/validate.yml .github/workflows/validate-clients.yml
+          git diff --cached --check
+          git commit -m "Add known-good 3x-ui mirror fallback"
+          git push
