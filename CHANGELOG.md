@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.1.2-dev — 2026-09-15
+
+Client-creation workflow improvements.
+
+- `clients.sh` no longer requires a `.` sentinel line.
+- Client input is pasted as one block and ends automatically after 1.5 seconds without another completed line; if the last pasted row has no trailing newline, one `Enter` commits it.
+- `install.sh` now installs the helper as `/usr/local/sbin/vpn-clients` from this repository after a successful node install.
+- The installer offers to launch bulk client creation immediately; declining leaves the completed VPN installation untouched and the helper remains available for later use.
+- Added CI invariants for the new idle-input mode and post-install helper handoff.
+
 ## 0.1.1-dev — 2026-09-15
 
 Post-test fixes after the first successful end-to-end VPS deployment.
