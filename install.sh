@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-VERSION="0.1.3-dev"
+VERSION="0.1.4-dev"
 WS_PATH="/client/api/v2"
 XRAY_PORT=10000
 BASIC_USER="admin"
