@@ -1,0 +1,42 @@
+name: Validate installer
+
+on:
+  push:
+    paths:
+      - install.sh
+      - .github/workflows/validate.yml
+  pull_request:
+    paths:
+      - install.sh
+      - .github/workflows/validate.yml
+
+permissions:
+  contents: read
+
+jobs:
+  shell:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Bash syntax
+        run: bash -n install.sh
+
+      - name: ShellCheck
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y shellcheck
+          shellcheck --severity=error install.sh
+
+      - name: Required invariants
+        run: |
+          grep -Fq 'WS_PATH="/client/api/v2"' install.sh
+          grep -Fq 'XRAY_PORT=10000' install.sh
+          grep -Fq 'BASIC_USER="admin"' install.sh
+          grep -Fq 'client_name="default@$domain"' install.sh
+          grep -Fq 'trustedXForwardedFor' install.sh
+          grep -Fq "subEnable','false" install.sh
+          grep -Fq 'location = /favicon.svg' install.sh
+          grep -Fq 'sub_filter' install.sh
+          grep -Fq 'ssh_server_port' install.sh
