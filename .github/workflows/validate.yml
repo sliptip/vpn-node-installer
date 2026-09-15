@@ -31,7 +31,7 @@ jobs:
 
       - name: Required invariants
         run: |
-          grep -Fq 'VERSION="0.1.3-dev"' install.sh
+          grep -Fq 'VERSION="0.1.4-dev"' install.sh
           grep -Fq 'local VERSION=""' install.sh
           grep -Fq 'WS_PATH="/client/api/v2"' install.sh
           grep -Fq 'XRAY_PORT=10000' install.sh
