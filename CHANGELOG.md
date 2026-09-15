@@ -1,8 +1,20 @@
 # Changelog
 
+## 0.1.1-dev — 2026-09-15
+
+Post-test fixes after the first successful end-to-end VPS deployment.
+
+- Initial client name changed from `default` to `default@<full-domain>`.
+- Installer-generated UUID v4 remains the source of truth for the client ID.
+- UFW now detects and preserves the active SSH server port instead of assuming port 22.
+- WebSocket audit still requires HTTP 101 but suppresses the expected curl timeout after the protocol upgrade.
+- Added an explicit `/favicon.svg` route and favicon link for the neutral service page.
+- nginx injects the same favicon link into proxied 3x-ui HTML.
+- Added GitHub Actions validation for Bash syntax, ShellCheck errors and required installer invariants.
+
 ## 0.1.0-dev — 2026-09-15
 
-Initial development version.
+Initial development version. This version completed the first clean-VPS end-to-end test successfully, including a real VLESS client connection.
 
 - Ubuntu 24.04 x64 preflight.
 - Immediate/persistent IPv6 disable.
@@ -14,10 +26,10 @@ Initial development version.
 - subscription server disabled.
 - VLESS WebSocket inbound on localhost:10000.
 - fixed `/client/api/v2` WS path.
-- installer-generated UUID v4 for `default` client.
+- installer-generated UUID v4 for the initial client.
 - `trustedXForwardedFor` support.
 - nginx Basic Auth (`admin`).
-- UFW 22/80/443.
+- UFW SSH/80/443 baseline.
 - neutral embedded favicon and service endpoint.
 - health/version endpoints.
 - safe re-run guard and diagnostics.
