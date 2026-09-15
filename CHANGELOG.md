@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.4-dev — 2026-09-15
+
+Safety and version-reporting fixes after the first live-node maintenance pass.
+
+- Fixed OS detection so sourcing `/etc/os-release` cannot overwrite the installer's own `VERSION`; `/version`, state and logs now retain the actual installer version.
+- Bulk client creation now uses a fail-safe `[y/N]` confirmation: only an explicit `y`/`Y` performs the mutation; `Enter` cancels.
+- `install.sh` and `clients.sh` now report `0.1.4-dev`.
+- CI keeps explicit invariants for installer-version preservation and fail-safe client confirmation.
+
 ## 0.1.3-dev — 2026-09-15
 
 Safer 3x-ui release selection for fresh installs.
@@ -14,8 +23,6 @@ Safer 3x-ui release selection for fresh installs.
 - Existing completed nodes are never automatically upgraded or downgraded by this mechanism.
 - The accepted 3x-ui tag is stored as `XUI_VERSION` in node state and shown in the final summary.
 - Extended installer CI invariants for known-good selection, tagged installation, compatibility gate and fallback cleanup.
-- Fixed OS detection so sourcing `/etc/os-release` cannot overwrite the installer's own `VERSION`; `/version`, state and logs now retain the actual installer version.
-- Bulk client creation now uses a fail-safe `[y/N]` confirmation: only an explicit `y`/`Y` performs the mutation; `Enter` cancels.
 
 ## 0.1.2-dev — 2026-09-15
 
