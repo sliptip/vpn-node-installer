@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-VERSION="0.1.1-dev"
+VERSION="0.1.2-dev"
 WS_PATH="/client/api/v2"
 XRAY_PORT=10000
 BASIC_USER="admin"
@@ -16,6 +16,8 @@ WEB_ROOT="/var/www/vpn-node"
 STATIC_ROOT="/var/www/vpn-node-static"
 HTPASSWD="/etc/nginx/.htpasswd"
 UPSTREAM_INSTALL="https://raw.githubusercontent.com/MHSanaei/3x-ui/main/install.sh"
+CLIENT_HELPER_URL="https://raw.githubusercontent.com/sliptip/vpn-node-installer/main/clients.sh"
+CLIENT_HELPER_BIN="/usr/local/sbin/vpn-clients"
 
 umask 077
 mkdir -p "$(dirname "$LOG")"
@@ -498,6 +500,41 @@ $link
 EOF
 }
 
+install_client_helper(){
+  local tmp
+  tmp=$(mktemp /root/vpn-clients-helper.XXXXXX.sh)
+  if ! curl -fsSL "$CLIENT_HELPER_URL" -o "$tmp"; then
+    rm -f "$tmp"
+    warn "Не удалось скачать clients.sh с GitHub. Сам VPN-узел уже установлен."
+    return 1
+  fi
+  chmod 700 "$tmp"
+  if ! bash -n "$tmp"; then
+    rm -f "$tmp"
+    warn "Скачанный clients.sh не прошёл bash -n. Сам VPN-узел уже установлен."
+    return 1
+  fi
+  install -m755 "$tmp" "$CLIENT_HELPER_BIN"
+  rm -f "$tmp"
+  log "Installed client helper to $CLIENT_HELPER_BIN"
+}
+
+offer_add_clients(){
+  local answer
+  if [[ ! -x "$CLIENT_HELPER_BIN" ]]; then
+    install_client_helper || return 0
+  fi
+  printf '\n'
+  read -r -p "Добавить дополнительных клиентов сейчас? [y/N]: " answer
+  if [[ ! "$answer" =~ ^[Yy]$ ]]; then
+    echo "Пропущено. Позже можно запустить: sudo vpn-clients"
+    return 0
+  fi
+  if ! "$CLIENT_HELPER_BIN"; then
+    warn "Добавление клиентов завершилось с ошибкой. Основная установка VPN уже завершена; повторить можно командой: sudo vpn-clients"
+  fi
+}
+
 main(){
   need_root; need_tty; check_os; existing_guard
   command -v curl >/dev/null || { apt-get update; apt-get install -y curl ca-certificates python3; }
@@ -545,6 +582,7 @@ main(){
   write_state "$domain" "$ip" "$panel_port" "$panel_path" "$key" "$client_name"
   log "Installation completed domain=$domain ip=$ip version=$VERSION"
   summary "$domain" "$ip" "$panel_path" "$key" "$uuid" "$client_name"
+  offer_add_clients
 }
 
 main "$@"
