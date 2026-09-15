@@ -31,7 +31,7 @@ jobs:
 
       - name: Required invariants
         run: |
-          grep -Fq 'VERSION="0.1.4-dev"' install.sh
+          grep -Fq 'VERSION="0.1.5-dev"' install.sh
           grep -Fq 'local VERSION=""' install.sh
           grep -Fq 'WS_PATH="/client/api/v2"' install.sh
           grep -Fq 'XRAY_PORT=10000' install.sh
@@ -45,6 +45,11 @@ jobs:
           grep -Fq 'CLIENT_HELPER_BIN="/usr/local/sbin/vpn-clients"' install.sh
           grep -Fq 'offer_add_clients' install.sh
           grep -Fq 'XUI_KNOWN_GOOD="v3.8.0"' install.sh
+          grep -Fq 'XUI_MIRROR_REPO="sliptip/3x-ui"' install.sh
+          grep -Fq 'XUI_KNOWN_GOOD_AMD64_SHA256="236b837627520f0c4ae4134dc6a34ea5e294b69e158879795fe8cd51c5f3582c"' install.sh
+          grep -Fq 'verify_xui_mirror_known_good' install.sh
+          grep -Fq 'prepare_xui_installer_source' install.sh
+          grep -Fq 'install_known_good_with_source_fallback' install.sh
           grep -Fq 'resolve_latest_xui_tag' install.sh
           grep -Fq 'choose_xui_version' install.sh
           grep -Fq 'xui_installer_url' install.sh
