@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-VERSION="0.1.2-dev"
+VERSION="0.1.3-dev"
 WS_PATH="/client/api/v2"
 XRAY_PORT=10000
 BASIC_USER="admin"
@@ -15,9 +15,15 @@ ACME_ROOT="/var/www/letsencrypt"
 WEB_ROOT="/var/www/vpn-node"
 STATIC_ROOT="/var/www/vpn-node-static"
 HTPASSWD="/etc/nginx/.htpasswd"
-UPSTREAM_INSTALL="https://raw.githubusercontent.com/MHSanaei/3x-ui/main/install.sh"
+XUI_UPSTREAM_REPO="MHSanaei/3x-ui"
+XUI_KNOWN_GOOD="v3.8.0"
+XUI_RELEASES_LATEST="https://github.com/MHSanaei/3x-ui/releases/latest"
+XUI_RAW_BASE="https://raw.githubusercontent.com/MHSanaei/3x-ui"
 CLIENT_HELPER_URL="https://raw.githubusercontent.com/sliptip/vpn-node-installer/main/clients.sh"
 CLIENT_HELPER_BIN="/usr/local/sbin/vpn-clients"
+XUI_SELECTED_TAG="$XUI_KNOWN_GOOD"
+XUI_ACTIVE_TAG=""
+XUI_FALLBACK_ENABLED=0
 
 umask 077
 mkdir -p "$(dirname "$LOG")"
@@ -47,6 +53,8 @@ try:
 except Exception: raise SystemExit(1)
 PY
 }
+
+valid_xui_tag(){ [[ "$1" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; }
 
 prompt_nonempty(){
   local __v="$1" p="$2" x=""
@@ -107,6 +115,70 @@ ssh_server_port(){
   echo "$p"
 }
 
+resolve_latest_xui_tag(){
+  local effective tag api_tmp
+  effective=$(curl -fsSL -o /dev/null -w '%{url_effective}' --connect-timeout 8 --max-time 20 "$XUI_RELEASES_LATEST" 2>/dev/null || true)
+  tag="${effective##*/}"
+  if valid_xui_tag "$tag"; then
+    printf '%s\n' "$tag"
+    return 0
+  fi
+
+  api_tmp=$(mktemp /root/xui-release.XXXXXX.json)
+  if curl -fsSL --connect-timeout 8 --max-time 20 "https://api.github.com/repos/${XUI_UPSTREAM_REPO}/releases/latest" -o "$api_tmp" 2>/dev/null; then
+    tag=$(python3 - "$api_tmp" <<'PY'
+import json,sys
+try:
+    print(str(json.load(open(sys.argv[1], encoding='utf-8')).get('tag_name') or ''))
+except Exception:
+    pass
+PY
+)
+  fi
+  rm -f "$api_tmp"
+  valid_xui_tag "$tag" || return 1
+  printf '%s\n' "$tag"
+}
+
+version_gt(){
+  local a="${1#v}" b="${2#v}" top
+  [[ "$a" != "$b" ]] || return 1
+  top=$(printf '%s\n%s\n' "$a" "$b" | sort -V | tail -n1)
+  [[ "$top" == "$a" ]]
+}
+
+choose_xui_version(){
+  local latest="" choice=""
+  latest=$(resolve_latest_xui_tag || true)
+  XUI_SELECTED_TAG="$XUI_KNOWN_GOOD"
+  XUI_FALLBACK_ENABLED=0
+
+  if [[ -z "$latest" ]]; then
+    warn "Не удалось определить latest stable 3x-ui. Использую проверенную $XUI_KNOWN_GOOD."
+    return 0
+  fi
+
+  if [[ "$latest" == "$XUI_KNOWN_GOOD" ]]; then
+    echo "3x-ui: latest stable = $latest; это текущая проверенная версия."
+    return 0
+  fi
+
+  if version_gt "$latest" "$XUI_KNOWN_GOOD"; then
+    printf '\nДоступна новая stable-версия 3x-ui: %s\n' "$latest"
+    printf 'Последняя проверенная этим установщиком: %s\n\n' "$XUI_KNOWN_GOOD"
+    echo "1) Попробовать $latest; при несовместимости автоматически вернуться на $XUI_KNOWN_GOOD"
+    echo "2) Сразу установить проверенную $XUI_KNOWN_GOOD (по умолчанию)"
+    read -r -p "Выберите [1/2]: " choice
+    if [[ "$choice" == 1 ]]; then
+      XUI_SELECTED_TAG="$latest"
+      XUI_FALLBACK_ENABLED=1
+    fi
+    return 0
+  fi
+
+  warn "Upstream latest ($latest) не новее known-good $XUI_KNOWN_GOOD. Использую known-good."
+}
+
 existing_guard(){
   if [[ -f "$MARKER" ]]; then
     [[ -r "$STATE_FILE" ]] && . "$STATE_FILE"
@@ -117,7 +189,7 @@ existing_guard(){
     [[ "$c" == 1 ]] && diagnostics
     exit 0
   fi
-  if [[ -x "$XUI_BIN" || -f "$XUI_DB" || -e /etc/nginx/sites-enabled/vpn-node.conf ]]; then
+  if [[ -x "$XUI_BIN" || -f "$XUI_DB" || -e /usr/bin/x-ui || -e /etc/systemd/system/x-ui.service || -e /etc/nginx/sites-enabled/vpn-node.conf ]]; then
     die "Найдена существующая/частичная конфигурация без маркера установщика. Ничего не перезаписываю."
   fi
 }
@@ -138,11 +210,11 @@ diagnostics(){
 disable_ipv6(){
   info "Отключаю IPv6"
   install -d -m755 /etc/sysctl.d
-  cat >/etc/sysctl.d/99-vpn-node-disable-ipv6.conf <<'EOF'
+  cat >/etc/sysctl.d/99-vpn-node-disable-ipv6.conf <<'SYSCTL'
 net.ipv6.conf.all.disable_ipv6 = 1
 net.ipv6.conf.default.disable_ipv6 = 1
 net.ipv6.conf.lo.disable_ipv6 = 1
-EOF
+SYSCTL
   sysctl -w net.ipv6.conf.all.disable_ipv6=1 >/dev/null
   sysctl -w net.ipv6.conf.default.disable_ipv6=1 >/dev/null
   sysctl -w net.ipv6.conf.lo.disable_ipv6=1 >/dev/null
@@ -284,7 +356,7 @@ SVG
 write_http_nginx(){
   local d="$1"
   info "Создаю HTTP nginx для ACME"
-  cat >/etc/nginx/sites-available/vpn-node.conf <<EOF
+  cat >/etc/nginx/sites-available/vpn-node.conf <<EOF_NGINX
 server {
   listen 80;
   server_name $d;
@@ -295,7 +367,7 @@ server {
   location = /favicon.ico { alias $STATIC_ROOT/favicon.svg; default_type image/svg+xml; }
   location / { return 404; }
 }
-EOF
+EOF_NGINX
   ln -sfn /etc/nginx/sites-available/vpn-node.conf /etc/nginx/sites-enabled/vpn-node.conf
   rm -f /etc/nginx/sites-enabled/default
   nginx -t
@@ -309,38 +381,56 @@ issue_cert(){
   certbot certonly --webroot -w "$ACME_ROOT" -d "$d" --non-interactive --agree-tos --register-unsafely-without-email --keep-until-expiring
   [[ -s "/etc/letsencrypt/live/$d/fullchain.pem" && -s "/etc/letsencrypt/live/$d/privkey.pem" ]] || die "Сертификат не найден."
   install -d -m755 /etc/letsencrypt/renewal-hooks/deploy
-  cat >/etc/letsencrypt/renewal-hooks/deploy/reload-nginx.sh <<'EOF'
+  cat >/etc/letsencrypt/renewal-hooks/deploy/reload-nginx.sh <<'HOOK'
 #!/bin/sh
 nginx -t && systemctl reload nginx
-EOF
+HOOK
   chmod 755 /etc/letsencrypt/renewal-hooks/deploy/reload-nginx.sh
   systemctl enable --now certbot.timer
 }
 
-install_3xui(){
-  local port="$1" base="$2" user="$3" pass="$4" f
-  info "Ставлю latest 3x-ui"
-  f=$(mktemp /root/3x-ui-install.XXXXXX.sh); chmod 700 "$f"
-  curl -fsSL "$UPSTREAM_INSTALL" -o "$f"
-  XUI_NONINTERACTIVE=1 XUI_DB_TYPE=sqlite XUI_USERNAME="$user" XUI_PASSWORD="$pass" XUI_PANEL_PORT="$port" XUI_WEB_BASE_PATH="$base" XUI_SSL_MODE=none bash "$f"
+xui_installer_url(){ printf '%s/%s/install.sh\n' "$XUI_RAW_BASE" "$1"; }
+
+install_3xui_version(){
+  local tag="$1" port="$2" base="$3" user="$4" pass="$5" f url
+  info "Ставлю 3x-ui $tag"
+  url=$(xui_installer_url "$tag")
+  f=$(mktemp /root/3x-ui-install.XXXXXX.sh) || return 1
+  chmod 700 "$f"
+  if ! curl -fsSL --connect-timeout 10 --max-time 60 "$url" -o "$f"; then
+    rm -f "$f"; return 1
+  fi
+  if ! bash -n "$f"; then
+    rm -f "$f"; return 1
+  fi
+  if ! XUI_NONINTERACTIVE=1 XUI_DB_TYPE=sqlite XUI_USERNAME="$user" XUI_PASSWORD="$pass" XUI_PANEL_PORT="$port" XUI_WEB_BASE_PATH="$base" XUI_SSL_MODE=none bash "$f" "$tag"; then
+    rm -f "$f"; return 1
+  fi
   rm -f "$f"
-  [[ -x "$XUI_BIN" && -f "$XUI_DB" ]] || die "3x-ui не установился полностью."
-  "$XUI_BIN" setting -listenIP 127.0.0.1 >/dev/null
-  "$XUI_BIN" setting -webBasePath "/$base/" >/dev/null
-  systemctl stop x-ui
-  sqlite3 "$XUI_DB" "INSERT OR IGNORE INTO settings(key,value) VALUES('subEnable','false'); UPDATE settings SET value='false' WHERE key='subEnable';"
-  systemctl start x-ui; sleep 3
-  [[ "$(sqlite3 "$XUI_DB" "SELECT value FROM settings WHERE key='webListen' LIMIT 1;")" == 127.0.0.1 ]] || die "Панель не привязана к localhost."
-  [[ "$(sqlite3 "$XUI_DB" "SELECT value FROM settings WHERE key='webPort' LIMIT 1;")" == "$port" ]] || die "Порт панели отличается от заданного."
-  ss -ltnH | awk '{print $4}' | grep -Eq '(^|:)2096$' && die "2096 всё ещё слушает." || true
+  [[ -x "$XUI_BIN" && -f "$XUI_DB" ]] || return 1
+  "$XUI_BIN" setting -listenIP 127.0.0.1 >/dev/null || return 1
+  "$XUI_BIN" setting -webBasePath "/$base/" >/dev/null || return 1
+  systemctl stop x-ui || return 1
+  sqlite3 "$XUI_DB" "INSERT OR IGNORE INTO settings(key,value) VALUES('subEnable','false'); UPDATE settings SET value='false' WHERE key='subEnable';" || return 1
+  systemctl start x-ui || return 1
+  sleep 3
+  [[ "$(sqlite3 "$XUI_DB" "SELECT value FROM settings WHERE key='webListen' LIMIT 1;")" == 127.0.0.1 ]] || return 1
+  [[ "$(sqlite3 "$XUI_DB" "SELECT value FROM settings WHERE key='webPort' LIMIT 1;")" == "$port" ]] || return 1
+  if ss -ltnH | awk '{print $4}' | grep -Eq '(^|:)2096$'; then
+    return 1
+  fi
 }
 
 api_token(){
   local token=""
-  if [[ -r /etc/x-ui/install-result.env ]]; then . /etc/x-ui/install-result.env; token="${XUI_API_TOKEN:-}"; fi
-  [[ -n "$token" ]] || token=$($XUI_BIN setting -getApiToken 2>/dev/null | awk -F': ' '/apiToken:/ {print $2;exit}' | tr -d '[:space:]')
-  [[ -n "$token" ]] || die "Не удалось получить API token 3x-ui."
-  echo "$token"
+  if [[ -r /etc/x-ui/install-result.env ]]; then
+    # shellcheck disable=SC1091
+    . /etc/x-ui/install-result.env
+    token="${XUI_API_TOKEN:-}"
+  fi
+  [[ -n "$token" ]] || token=$($XUI_BIN setting -getApiToken 2>/dev/null | awk -F': ' '/apiToken:/ {print $2;exit}' | tr -d '[:space:]' || true)
+  [[ -n "$token" ]] || return 1
+  printf '%s\n' "$token"
 }
 
 create_inbound(){
@@ -348,8 +438,10 @@ create_inbound(){
   info "Создаю VLESS WS inbound и клиента $client с UUID v4"
   api="http://127.0.0.1:${port}${path}panel/api"
   code=$(curl -sS -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $token" "$api/server/status" || true)
-  [[ "$code" == 200 ]] || die "Local API 3x-ui недоступен (HTTP $code)."
-  payload=$(mktemp /root/vpn-node-inbound.XXXXXX.json); resp=$(mktemp /root/vpn-node-response.XXXXXX.json); chmod 600 "$payload" "$resp"
+  [[ "$code" == 200 ]] || return 1
+  payload=$(mktemp /root/vpn-node-inbound.XXXXXX.json) || return 1
+  resp=$(mktemp /root/vpn-node-response.XXXXXX.json) || { rm -f "$payload"; return 1; }
+  chmod 600 "$payload" "$resp"
   python3 - "$payload" "$name" "$uuid" "$client" <<'PY'
 import json,sys
 p,name,uid,client=sys.argv[1:]
@@ -360,17 +452,18 @@ json.dump(obj,open(p,'w'),separators=(',',':'))
 PY
   code=$(curl -sS -o "$resp" -w '%{http_code}' -X POST -H "Authorization: Bearer $token" -H 'Content-Type: application/json' --data-binary "@$payload" "$api/inbounds/add" || true)
   rm -f "$payload"
-  [[ "$code" == 200 ]] || { rm -f "$resp"; die "3x-ui API не создал inbound (HTTP $code)."; }
+  [[ "$code" == 200 ]] || { rm -f "$resp"; return 1; }
   ok=$(python3 - "$resp" <<'PY'
 import json,sys
 try: print('1' if json.load(open(sys.argv[1])).get('success') is True else '0')
 except Exception: print('0')
 PY
 )
-  rm -f "$resp"; [[ "$ok" == 1 ]] || die "3x-ui API вернул success=false."
+  rm -f "$resp"
+  [[ "$ok" == 1 ]] || return 1
   sleep 2
   ss -ltnH | awk '{print $4}' | grep -Eq "127\.0\.0\.1:${XRAY_PORT}$" || { systemctl restart x-ui; sleep 3; }
-  ss -ltnH | awk '{print $4}' | grep -Eq "127\.0\.0\.1:${XRAY_PORT}$" || die "Xray не слушает 127.0.0.1:${XRAY_PORT}."
+  ss -ltnH | awk '{print $4}' | grep -Eq "127\.0\.0\.1:${XRAY_PORT}$" || return 1
   python3 - "$XUI_DB" "$uuid" "$client" <<'PY'
 import json,sqlite3,sys
 r=sqlite3.connect(sys.argv[1]).execute("SELECT settings FROM inbounds WHERE port=10000 AND protocol='vless' LIMIT 1").fetchone()
@@ -378,6 +471,104 @@ if not r: raise SystemExit(1)
 c=json.loads(r[0]).get('clients') or []
 raise SystemExit(0 if any(x.get('id')==sys.argv[2] and x.get('email')==sys.argv[3] for x in c) else 1)
 PY
+}
+
+xui_compatibility_gate(){
+  local port="$1" path="$2" token="$3" name="$4" uuid="$5" client="$6"
+  local api code list_json options_json client_json encoded
+  api="http://127.0.0.1:${port}${path}panel/api"
+  list_json=$(mktemp /root/xui-clients-list.XXXXXX.json) || return 1
+  options_json=$(mktemp /root/xui-inbounds-options.XXXXXX.json) || { rm -f "$list_json"; return 1; }
+  client_json=$(mktemp /root/xui-client-get.XXXXXX.json) || { rm -f "$list_json" "$options_json"; return 1; }
+  chmod 600 "$list_json" "$options_json" "$client_json"
+
+  code=$(curl -sS -o "$list_json" -w '%{http_code}' -H "Authorization: Bearer $token" "$api/clients/list" || true)
+  [[ "$code" == 200 ]] || { rm -f "$list_json" "$options_json" "$client_json"; return 1; }
+  code=$(curl -sS -o "$options_json" -w '%{http_code}' -H "Authorization: Bearer $token" "$api/inbounds/options" || true)
+  [[ "$code" == 200 ]] || { rm -f "$list_json" "$options_json" "$client_json"; return 1; }
+  encoded=$(python3 - "$client" <<'PY'
+import sys,urllib.parse
+print(urllib.parse.quote(sys.argv[1], safe=''))
+PY
+)
+  code=$(curl -sS -o "$client_json" -w '%{http_code}' -H "Authorization: Bearer $token" "$api/clients/get/$encoded" || true)
+  [[ "$code" == 200 ]] || { rm -f "$list_json" "$options_json" "$client_json"; return 1; }
+
+  local rc=0
+  python3 - "$list_json" "$options_json" "$client_json" "$name" "$uuid" "$client" "$XRAY_PORT" <<'PY' || rc=$?
+import json,sys
+lp,op,cp,remark,uid,email,port=sys.argv[1:]
+port=int(port)
+try:
+    listed=json.load(open(lp,encoding='utf-8'))
+    options=json.load(open(op,encoding='utf-8'))
+    got=json.load(open(cp,encoding='utf-8'))
+except Exception:
+    raise SystemExit(1)
+if listed.get('success') is not True or options.get('success') is not True or got.get('success') is not True:
+    raise SystemExit(2)
+rows=options.get('obj') or []
+matches=[r for r in rows if r.get('protocol')=='vless' and int(r.get('port') or 0)==port and r.get('remark')==remark]
+if len(matches)!=1:
+    raise SystemExit(3)
+inbound_id=matches[0].get('id')
+obj=got.get('obj') or {}
+client=obj.get('client') or {}
+actual=str(client.get('uuid') or client.get('id') or '')
+if str(client.get('email') or '') != email or actual != uid:
+    raise SystemExit(4)
+if inbound_id not in (obj.get('inboundIds') or []):
+    raise SystemExit(5)
+PY
+  rm -f "$list_json" "$options_json" "$client_json"
+  return "$rc"
+}
+
+cleanup_xui_fresh_attempt(){
+  [[ ! -f "$MARKER" ]] || return 1
+  info "Очищаю неудачную fresh-install попытку 3x-ui перед fallback"
+  systemctl stop x-ui >/dev/null 2>&1 || true
+  systemctl disable x-ui >/dev/null 2>&1 || true
+  rm -f /etc/systemd/system/x-ui.service
+  rm -f /etc/systemd/system/multi-user.target.wants/x-ui.service
+  rm -f /usr/bin/x-ui
+  rm -f /etc/default/x-ui
+  rm -rf /usr/local/x-ui /etc/x-ui
+  systemctl daemon-reload
+  systemctl reset-failed x-ui >/dev/null 2>&1 || true
+  ! systemctl is-active --quiet x-ui 2>/dev/null
+}
+
+install_xui_stack(){
+  local tag="$1" port="$2" base="$3" path="$4" user="$5" pass="$6" name="$7" uuid="$8" client="$9" token
+  install_3xui_version "$tag" "$port" "$base" "$user" "$pass" || return 1
+  token=$(api_token) || return 1
+  create_inbound "$port" "$path" "$token" "$name" "$uuid" "$client" || { unset token; return 1; }
+  xui_compatibility_gate "$port" "$path" "$token" "$name" "$uuid" "$client" || { unset token; return 1; }
+  unset token
+}
+
+install_xui_with_fallback(){
+  local port="$1" base="$2" path="$3" user="$4" pass="$5" name="$6" uuid="$7" client="$8"
+  local selected="$XUI_SELECTED_TAG"
+
+  if install_xui_stack "$selected" "$port" "$base" "$path" "$user" "$pass" "$name" "$uuid" "$client"; then
+    XUI_ACTIVE_TAG="$selected"
+    info "3x-ui $selected прошла compatibility gate"
+    return 0
+  fi
+
+  if ((XUI_FALLBACK_ENABLED)) && [[ "$selected" != "$XUI_KNOWN_GOOD" ]]; then
+    warn "3x-ui $selected не прошла установку/compatibility gate. Выполняю автоматический fallback на $XUI_KNOWN_GOOD."
+    cleanup_xui_fresh_attempt || return 1
+    if install_xui_stack "$XUI_KNOWN_GOOD" "$port" "$base" "$path" "$user" "$pass" "$name" "$uuid" "$client"; then
+      XUI_ACTIVE_TAG="$XUI_KNOWN_GOOD"
+      info "Fallback успешен: 3x-ui $XUI_KNOWN_GOOD"
+      return 0
+    fi
+  fi
+
+  return 1
 }
 
 basic_auth(){
@@ -390,7 +581,7 @@ basic_auth(){
 write_final_nginx(){
   local d="$1" port="$2" panel="$3" no="${3%/}"
   info "Записываю финальный nginx"
-  cat >/etc/nginx/sites-available/vpn-node.conf <<EOF
+  cat >/etc/nginx/sites-available/vpn-node.conf <<EOF_NGINX
 server {
   listen 80;
   server_name $d;
@@ -442,7 +633,7 @@ server {
   location = /robots.txt { default_type text/plain; return 200 "User-agent: *\nDisallow: /\n"; }
   location / { return 404; }
 }
-EOF
+EOF_NGINX
   nginx -t; systemctl reload nginx
 }
 
@@ -468,16 +659,25 @@ final_checks(){
 }
 
 write_state(){
-  local d="$1" ip="$2" port="$3" panel="$4" name="$5" client="$6"
+  local d="$1" ip="$2" port="$3" panel="$4" name="$5" client="$6" xui_version="$7"
   install -d -m700 "$STATE_DIR"
-  { printf 'INSTALLER_VERSION=%q\n' "$VERSION"; printf 'DOMAIN=%q\n' "$d"; printf 'PUBLIC_IPV4=%q\n' "$ip"; printf 'PANEL_PORT=%q\n' "$port"; printf 'PANEL_PATH=%q\n' "$panel"; printf 'INBOUND=%q\n' "$name"; printf 'CLIENT=%q\n' "$client"; } >"$STATE_FILE"
+  {
+    printf 'INSTALLER_VERSION=%q\n' "$VERSION"
+    printf 'DOMAIN=%q\n' "$d"
+    printf 'PUBLIC_IPV4=%q\n' "$ip"
+    printf 'PANEL_PORT=%q\n' "$port"
+    printf 'PANEL_PATH=%q\n' "$panel"
+    printf 'INBOUND=%q\n' "$name"
+    printf 'CLIENT=%q\n' "$client"
+    printf 'XUI_VERSION=%q\n' "$xui_version"
+  } >"$STATE_FILE"
   chmod 600 "$STATE_FILE"; echo "$VERSION" >"$MARKER"; chmod 600 "$MARKER"
 }
 
 summary(){
-  local d="$1" ip="$2" panel="$3" name="$4" uuid="$5" client="$6"
+  local d="$1" ip="$2" panel="$3" name="$4" uuid="$5" client="$6" xui_version="$7"
   local link="vless://${uuid}@${d}:443?type=ws&encryption=none&security=tls&sni=${d}&host=${d}&path=%2Fclient%2Fapi%2Fv2&alpn=http%2F1.1#${client}"
-  cat <<EOF
+  cat <<EOF_SUMMARY
 
 ======================================================================
 УСТАНОВКА ЗАВЕРШЕНА
@@ -485,6 +685,7 @@ IPv4       : $ip
 Домен      : $d
 Панель     : https://$d$panel
 Basic Auth : $BASIC_USER / (ваш пароль)
+3x-ui      : $xui_version
 Inbound    : $name
 Клиент     : $client
 WS path    : $WS_PATH
@@ -497,7 +698,7 @@ $link
 Лог без паролей/UUID: $LOG
 Следующий обязательный шаг: реальный клиентский тест Telegram/сайтов через VPN.
 ======================================================================
-EOF
+EOF_SUMMARY
 }
 
 install_client_helper(){
@@ -537,10 +738,13 @@ offer_add_clients(){
 
 main(){
   need_root; need_tty; check_os; existing_guard
-  command -v curl >/dev/null || { apt-get update; apt-get install -y curl ca-certificates python3; }
+  if ! command -v curl >/dev/null || ! command -v python3 >/dev/null; then
+    apt-get update
+    apt-get install -y curl ca-certificates python3
+  fi
 
   echo "vpn-node-installer $VERSION"
-  local domain key panel_base panel_path panel_port xuser xpass bpass uuid ip token ssh_port client_name
+  local domain key panel_base panel_path panel_port xuser xpass bpass uuid ip ssh_port client_name xui_version
   while true; do
     read -r -p "Домен узла (например vpn.example.ru): " domain
     domain=$(tr '[:upper:]' '[:lower:]' <<<"$domain" | tr -d '[:space:]')
@@ -557,8 +761,9 @@ main(){
   prompt_secret bpass "Пароль Basic Auth"
   uuid=$(uuid_v4)
   ssh_port=$(ssh_server_port)
+  choose_xui_version
 
-  info "Начинаю установку: domain=$domain panel=$panel_path inbound=$key client=$client_name"
+  info "Начинаю установку: domain=$domain panel=$panel_path inbound=$key client=$client_name xui=$XUI_SELECTED_TAG"
   disable_ipv6
   telegram_test
   install_packages
@@ -570,18 +775,19 @@ main(){
   write_assets
   write_http_nginx "$domain"
   issue_cert "$domain"
-  install_3xui "$panel_port" "$panel_base" "$xuser" "$xpass"
-  token=$(api_token)
-  create_inbound "$panel_port" "$panel_path" "$token" "$key" "$uuid" "$client_name"
-  unset token
+
+  install_xui_with_fallback "$panel_port" "$panel_base" "$panel_path" "$xuser" "$xpass" "$key" "$uuid" "$client_name" \
+    || die "Не удалось установить совместимую версию 3x-ui."
+  xui_version="$XUI_ACTIVE_TAG"
   rm -f /etc/x-ui/install-result.env
+
   basic_auth "$bpass"
   unset bpass xpass
   write_final_nginx "$domain" "$panel_port" "$panel_path"
   final_checks "$domain" "$panel_port" "$panel_path"
-  write_state "$domain" "$ip" "$panel_port" "$panel_path" "$key" "$client_name"
-  log "Installation completed domain=$domain ip=$ip version=$VERSION"
-  summary "$domain" "$ip" "$panel_path" "$key" "$uuid" "$client_name"
+  write_state "$domain" "$ip" "$panel_port" "$panel_path" "$key" "$client_name" "$xui_version"
+  log "Installation completed domain=$domain ip=$ip version=$VERSION xui=$xui_version"
+  summary "$domain" "$ip" "$panel_path" "$key" "$uuid" "$client_name" "$xui_version"
   offer_add_clients
 }
 
