@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.1.3-dev — 2026-09-15
+
+Safer 3x-ui release selection for fresh installs.
+
+- Added explicit `XUI_KNOWN_GOOD=v3.8.0`.
+- Fresh installs resolve the current upstream latest stable 3x-ui release.
+- If latest equals known-good, install it directly; if a newer stable exists, offer to try it with automatic fallback or install known-good immediately. The safe default is known-good.
+- If latest lookup fails, use known-good.
+- Upstream installer scripts are fetched from the exact selected release tag and invoked with the same tag instead of using a floating `main` installer for the actual 3x-ui attempt.
+- Added a compatibility gate covering panel localhost settings, API token, VLESS inbound creation, Xray listener, initial client readback and client/inbound API endpoints used by this project.
+- A failed newer candidate is cleaned up only during the still-fresh install and retried as a clean tagged `v3.8.0` installation; no in-place downgrade of an existing database is attempted.
+- Existing completed nodes are never automatically upgraded or downgraded by this mechanism.
+- The accepted 3x-ui tag is stored as `XUI_VERSION` in node state and shown in the final summary.
+- Extended installer CI invariants for known-good selection, tagged installation, compatibility gate and fallback cleanup.
+
 ## 0.1.2-dev — 2026-09-15
 
 Client-creation workflow improvements.
