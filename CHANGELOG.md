@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.6-dev — 2026-09-16
+
+Bulk-client input hardening.
+
+- Reworked pasted input collection to finish on a 1.5-second character-idle gap after the paste starts, so the final line is preserved even without a trailing newline or `Enter`.
+- Single-line pastes without a trailing newline are handled by the same collector.
+- Client names made only of punctuation such as `.`, `..`, `_`, `+`, or `-` are rejected before preview/mutation; at least one ASCII letter or digit is required.
+- Extended `clients.sh --self-test` to cover both the no-final-newline path and punctuation-only rejection.
+- `install.sh` and `clients.sh` now report `0.1.6-dev`.
 ## 0.1.5-dev — 2026-09-15
 
 Known-good 3x-ui source redundancy.

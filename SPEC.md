@@ -136,7 +136,7 @@ The installer creates a neutral local SVG favicon. The service page references i
 
 `clients.sh` is a separate post-install helper. The installer downloads it from this repository, checks Bash syntax, installs it as `/usr/local/sbin/vpn-clients`, and then offers to launch it. Failure or cancellation of the helper does not invalidate the completed VPN installation.
 
-The operator does not upload a source list file. Input is pasted directly into the SSH terminal as one block. The first line waits normally. After input begins, complete lines are collected until no new complete line arrives for **1.5 seconds**. If the final pasted line has no trailing newline, one `Enter` commits that last line. No `.` sentinel, blank terminator line, or `Ctrl+D` is required.
+The operator does not upload a source list file. Input is pasted directly into the SSH terminal as one block. The helper waits indefinitely for the first character; after input begins it collects the character stream until no new character arrives for **1.5 seconds**. A trailing newline is not required, so the final pasted line is preserved without pressing `Enter`. No `.` sentinel, blank terminator line, or `Ctrl+D` is required.
 
 Accepted input forms are plain client names, full email addresses, or a one-column Markdown table.
 
@@ -148,6 +148,7 @@ Normalization rules:
 - if an `@` exists, keep only the part to its left
 - lowercase the resulting name
 - accept only ASCII letters, digits, `.`, `_`, `+`, `-`
+- require at least one ASCII letter or digit; punctuation-only names are rejected
 - de-duplicate normalized names while preserving first-seen order
 - reject unsupported rows before any server change
 

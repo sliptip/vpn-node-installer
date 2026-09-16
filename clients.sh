@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-VERSION="0.1.5-dev"
+VERSION="0.1.6-dev"
 XRAY_PORT=10000
 WS_PATH="/client/api/v2"
 STATE_DIR="/etc/vpn-node-installer"
@@ -53,6 +53,9 @@ with open(src, encoding='utf-8') as f:
         if not re.fullmatch(r'[a-z0-9._+-]+', s):
             rejected.append((original, 'разрешены только латиница, цифры, точка, _, + и -'))
             continue
+        if not re.search(r'[a-z0-9]', s):
+            rejected.append((original, 'имя должно содержать хотя бы одну латинскую букву или цифру'))
+            continue
         if len(s) > 128:
             rejected.append((original, 'имя длиннее 128 символов'))
             continue
@@ -70,11 +73,31 @@ with open(rejected_path, 'w', encoding='utf-8') as f:
 PY
 }
 
+collect_input(){
+  local output="$1" timeout="${2:-$INPUT_IDLE_TIMEOUT}" ch=""
+  : >"$output"
+  if ! IFS= read -r -N 1 ch; then
+    [[ -n "$ch" ]] || return 1
+  fi
+  printf '%s' "$ch" >>"$output"
+  while true; do
+    ch=""
+    if IFS= read -r -N 1 -t "$timeout" ch; then
+      printf '%s' "$ch" >>"$output"
+      continue
+    fi
+    [[ -n "$ch" ]] && printf '%s' "$ch" >>"$output"
+    break
+  done
+  [[ -s "$output" ]]
+}
+
 self_test(){
-  local d raw out bad expected
+  local d raw out bad expected captured captured_expected rejected_count
   d=$(mktemp -d)
   trap 'rm -rf "$d"' RETURN
   raw="$d/raw"; out="$d/out"; bad="$d/bad"; expected="$d/expected"
+  captured="$d/captured"; captured_expected="$d/captured.expected"
   cat >"$raw" <<'EOF_TEST'
 | alice\@legacy.example |
 | --------------------- |
@@ -83,6 +106,11 @@ mobile-01@other.example
 work.pc@example.test
 plain_name
 alice@another.example
+.
+..
+_
++
+-
 
 EOF_TEST
   cat >"$expected" <<'EOF_TEST'
@@ -94,10 +122,17 @@ plain_name
 EOF_TEST
   normalize_input "$raw" "$out" "$bad"
   diff -u "$expected" "$out"
-  [[ ! -s "$bad" ]]
+  rejected_count=$(wc -l <"$bad")
+  [[ "$rejected_count" -eq 5 ]]
+  grep -Fq 'имя должно содержать хотя бы одну латинскую букву или цифру' "$bad"
+  printf 'first@example.test\nlast@example.test' >"$captured_expected"
+  collect_input "$captured" 0.1 < <(
+    printf 'first@example.test\nlast@example.test'
+    sleep 0.3
+  )
+  cmp -s "$captured_expected" "$captured"
   echo "clients.sh self-test: OK"
 }
-
 if [[ "${1:-}" == "--self-test" ]]; then
   self_test
   exit 0
@@ -150,16 +185,9 @@ printf 'vpn clients helper %s\n' "$VERSION"
 printf 'Узел: %s\n' "$DOMAIN"
 printf '\nВставьте весь список имён или email одним блоком, по одному на строку.\n'
 printf 'Можно вставить обычный столбец или Markdown-таблицу.\n'
-printf 'После последней строки нажмите Enter, если курсор остался на ней. Ввод завершится автоматически после %s сек без новых строк.\n\n' "$INPUT_IDLE_TIMEOUT"
+printf 'После начала вставки ввод завершится автоматически после %s сек без новых символов. Enter после последней строки не нужен.\n\n' "$INPUT_IDLE_TIMEOUT"
 
-: >"$raw"
-if ! IFS= read -r line; then
-  die "Не получено ни одной строки."
-fi
-printf '%s\n' "$line" >>"$raw"
-while IFS= read -r -t "$INPUT_IDLE_TIMEOUT" line; do
-  printf '%s\n' "$line" >>"$raw"
-done
+collect_input "$raw" || die "Не получено ни одного символа."
 printf '\nВвод завершён.\n'
 
 normalize_input "$raw" "$names" "$rejected"
