@@ -26,13 +26,17 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y shellcheck
           shellcheck --severity=error clients.sh
-      - name: Normalization self-test
+      - name: Normalization and input self-test
         run: bash clients.sh --self-test
       - name: Input and confirmation invariants
         run: |
-          grep -Fq 'VERSION="0.1.5-dev"' clients.sh
+          grep -Fq 'VERSION="0.1.6-dev"' clients.sh
           grep -Fq 'INPUT_IDLE_TIMEOUT="1.5"' clients.sh
-          grep -Fq 'read -r -t "$INPUT_IDLE_TIMEOUT"' clients.sh
+          grep -Fq 'collect_input(){' clients.sh
+          grep -Fq 'read -r -N 1 -t "$timeout" ch' clients.sh
+          grep -Fq "re.search(r'[a-z0-9]', s)" clients.sh
+          ! grep -Fq 'read -r -t "$INPUT_IDLE_TIMEOUT"' clients.sh
+          ! grep -Fq 'После последней строки нажмите Enter' clients.sh
           ! grep -Fq 'введите точку' clients.sh
           grep -Fq 'Добавить ${#new_clients[@]} клиент(ов)? [y/N]:' clients.sh
           grep -Fq '[[ "$answer" =~ ^[Yy]$ ]] ||' clients.sh
