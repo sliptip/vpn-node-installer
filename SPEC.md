@@ -57,6 +57,8 @@ Pinned fallback emergency mirror: `https://github.com/sliptip/3x-ui`. The mirror
 
 The latest successfully tested 3x-ui release (last known good) is **`v3.8.5`**. On 2026-09-16, installer **`0.1.7-dev`** with client helper **`0.1.6-dev`** completed a clean Ubuntu 24.04 LTS x64 deployment: credential/session verification, browser panel login, client creation, final installer checks, certificate renewal dry-run and real external VPN use were confirmed.
 
+On the same date, **`0.1.8-dev`** with 3x-ui **`v3.8.5`** passed a full VPS deployment and end-to-end validation. The installation transcript confirms restart after a DNS-stage stop, explicit continuation with one unreachable authoritative NS, certificate issuance, credential/session verification, inbound/default client creation, final checks, certificate renewal dry-run and bulk client creation. The operator separately confirmed real VPN client use, server access and browser panel login.
+
 As of installer `0.1.8-dev`, version roles are separate: `XUI_KNOWN_GOOD=v3.8.5` is the last fully validated release; `XUI_FALLBACK_TAG=v3.8.0` is the archived emergency version. No `v3.8.5` mirror release is required or created.
 
 Fresh-install version selection:

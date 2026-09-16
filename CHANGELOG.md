@@ -9,7 +9,9 @@ DNS timeout handling and separate validated/emergency 3x-ui versions.
 - Reuse one DNS snapshot for evaluation/display and include query duration in the wait timer.
 - Set `XUI_KNOWN_GOOD=v3.8.5` as the validated choice; continue discovering and offering newer latest stable releases. Retain the archived emergency version separately as `XUI_FALLBACK_TAG=v3.8.0`.
 - Fresh-install fallback: chosen upstream → validated upstream when not already attempted → emergency upstream → emergency mirror. No archive of `v3.8.5` is created.
-- Add offline DNS/confirmation/version-selection/fallback regression coverage. Client helper stays `0.1.6-dev`; a full `0.1.8-dev` VPS run is still pending.
+- Add offline DNS/confirmation/version-selection/fallback regression coverage. Client helper stays `0.1.6-dev`.
+- Validation completed on 2026-09-16: `0.1.8-dev` with 3x-ui `v3.8.5` passed an Ubuntu 24.04 LTS x64 VPS deployment, including restart after the previous DNS-stage stop, explicit continuation with one unreachable authoritative NS, certificate issuance, credential/session checks, inbound/default client creation, final checks and certificate renewal dry-run. Bulk client creation also completed successfully.
+- The operator separately confirmed real VPN client use, server access and browser panel login. No further installer changes were required by this validation; the latest/validated/emergency version policy is unchanged.
 
 ## 0.1.7-dev — 2026-09-16
 
