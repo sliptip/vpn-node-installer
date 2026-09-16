@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-VERSION="0.1.6-dev"
+VERSION="0.1.7-dev"
 WS_PATH="/client/api/v2"
 XRAY_PORT=10000
 BASIC_USER="admin"
@@ -28,18 +28,23 @@ XUI_SELECTED_TAG="$XUI_KNOWN_GOOD"
 XUI_ACTIVE_TAG=""
 XUI_FALLBACK_ENABLED=0
 
-umask 077
-mkdir -p "$(dirname "$LOG")"
-touch "$LOG"
-chmod 600 "$LOG"
-
 log(){ printf '[%s] %s\n' "$(date -Is)" "$*" >>"$LOG"; }
 info(){ printf '\n==> %s\n' "$*"; log "$*"; }
 warn(){ printf '\n[WARN] %s\n' "$*" >&2; log "WARN: $*"; }
 die(){ printf '\n[ERROR] %s\n' "$*" >&2; log "ERROR: $*"; exit 1; }
-trap 'rc=$?; log "ERROR line=${BASH_LINENO[0]:-?} rc=$rc"; printf "\n[ERROR] Установка прервана. Лог: %s\n" "$LOG" >&2; exit "$rc"' ERR
-
-need_root(){ [[ ${EUID:-$(id -u)} -eq 0 ]] || die "Запустите скрипт от root."; }
+need_root(){
+  if [[ ${EUID:-$(id -u)} -ne 0 ]]; then
+    printf '\n[ERROR] Запустите скрипт от root.\n' >&2
+    exit 1
+  fi
+}
+init_log(){
+  umask 077
+  mkdir -p "$(dirname "$LOG")"
+  touch "$LOG"
+  chmod 600 "$LOG"
+  trap 'rc=$?; log "ERROR line=${BASH_LINENO[0]:-?} rc=$rc"; printf "\n[ERROR] Установка прервана. Лог: %s\n" "$LOG" >&2; exit "$rc"' ERR
+}
 need_tty(){ [[ -t 0 && -t 1 ]] || die "Эта dev-версия рассчитана на интерактивный SSH-сеанс."; }
 
 check_os(){
@@ -60,10 +65,22 @@ PY
 
 valid_xui_tag(){ [[ "$1" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; }
 
-prompt_nonempty(){
-  local __v="$1" p="$2" x=""
-  while [[ -z "$x" ]]; do read -r -p "$p" x; done
-  printf -v "$__v" '%s' "$x"
+valid_panel_username(){
+  local LC_ALL=C
+  [[ "$1" =~ ^[A-Za-z0-9][A-Za-z0-9_.@+-]{0,63}$ ]]
+}
+
+prompt_panel_username(){
+  local __v="$1" value
+  while true; do
+    IFS= read -r -p "Логин 3x-ui: " value || return 1
+    if valid_panel_username "$value"; then
+      printf -v "$__v" '%s' "$value"
+      printf 'Логин панели: %s\n' "$value"
+      return 0
+    fi
+    echo "Логин: 1–64 символа, первый — латинская буква или цифра; далее также допустимы . _ @ + -. Без пробелов и кириллицы. Введите заново."
+  done
 }
 
 prompt_secret(){
@@ -78,7 +95,6 @@ prompt_secret(){
 }
 
 domain_key(){ awk -F. '{if(NF>=2) print $(NF-1)}' <<<"$1"; }
-normalize_path(){ local p="/${1#/}"; printf '%s/\n' "${p%/}"; }
 
 free_panel_port(){
   local p
@@ -205,7 +221,7 @@ diagnostics(){
   printf 'certbot.timer: %s\n' "$(systemctl is-active certbot.timer 2>/dev/null || true)"
   printf 'IPv6 disabled: %s\n' "$(sysctl -n net.ipv6.conf.all.disable_ipv6 2>/dev/null || echo '?')"
   ufw status 2>/dev/null | head -n5 || true
-  ss -ltnp | grep -E ':22|:80|:443|:2096|:10000|nginx|x-ui|xray' || true
+  ss -ltnp | grep -E ":($(ssh_server_port)|80|443|2096|${XRAY_PORT})([[:space:]]|$)|nginx|x-ui|xray" || true
   if [[ -n "${DOMAIN:-}" ]]; then
     curl -4fsS --max-time 10 "https://${DOMAIN}/health" || true; echo
   fi
@@ -250,7 +266,7 @@ telegram_test(){
 install_packages(){
   info "Устанавливаю пакеты"
   apt-get update
-  local p=(nginx certbot python3-certbot-nginx apache2-utils curl wget unzip socat sqlite3 rsync ca-certificates dnsutils netcat-openbsd ufw python3)
+  local p=(nginx certbot apache2-utils curl wget unzip socat sqlite3 rsync ca-certificates dnsutils netcat-openbsd ufw python3)
   if ! DEBIAN_FRONTEND=noninteractive apt-get install -y "${p[@]}"; then
     warn "apt/dpkg споткнулся; применяю известный nginx IPv6-listen fix."
     [[ -f /etc/nginx/sites-available/default ]] && {
@@ -517,6 +533,93 @@ raise SystemExit(0 if any(x.get('id')==sys.argv[2] and x.get('email')==sys.argv[
 PY
 }
 
+xui_credentials_gate(){
+  local port="$1" path="$2" user="$3" pass="$4"
+  valid_panel_username "$user" || return 1
+  # Password stays out of process arguments, files and diagnostic output.
+  XUI_GATE_PASSWORD="$pass" python3 - "$XUI_DB" "$port" "$path" "$user" <<'PY'
+import http.cookiejar
+import json
+import os
+import pathlib
+import sqlite3
+import sys
+import time
+import urllib.error
+import urllib.request
+
+db, port, path, username = sys.argv[1:]
+password = os.environ.pop('XUI_GATE_PASSWORD')
+base = f'http://127.0.0.1:{int(port)}{path}'
+
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+# Never send credentials through a configured proxy or follow a redirect.
+opener = urllib.request.build_opener(
+    urllib.request.ProxyHandler({}),
+    urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()),
+    NoRedirect(),
+)
+
+def request(endpoint, data=None, csrf=None):
+    headers = {'Accept': 'application/json'}
+    if data is not None:
+        headers['Content-Type'] = 'application/json'
+        data = json.dumps(data).encode('utf-8')
+    if csrf is not None:
+        headers['X-CSRF-Token'] = csrf
+    req = urllib.request.Request(base + endpoint, data=data, headers=headers)
+    with opener.open(req, timeout=5) as response:
+        result = json.load(response)
+        if response.status != 200 or not isinstance(result, dict) or result.get('success') is not True:
+            raise ValueError('unsuccessful response')
+        return result
+
+stage = 'точное совпадение логина в БД'
+logged_in = False
+csrf = None
+try:
+    conn = sqlite3.connect(pathlib.Path(db).resolve().as_uri() + '?mode=ro', uri=True)
+    try:
+        rows = conn.execute('SELECT CAST(username AS BLOB) FROM users ORDER BY id').fetchall()
+    finally:
+        conn.close()
+    if len(rows) != 1 or rows[0][0] != username.encode('ascii'):
+        raise ValueError('username mismatch')
+
+    stage = 'получение CSRF и cookies'
+    for attempt in range(5):
+        try:
+            csrf = request('csrf-token').get('obj')
+            if not isinstance(csrf, str) or not csrf:
+                raise ValueError('missing CSRF token')
+            break
+        except (OSError, ValueError, urllib.error.URLError):
+            if attempt == 4:
+                raise
+            time.sleep(1)
+
+    stage = 'вход с заданными логином и паролем'
+    # Only one credential attempt; no retries on authentication failure.
+    request('login', {'username': username, 'password': password}, csrf)
+    logged_in = True
+    stage = 'доступ по сессии после входа'
+    request('panel/api/server/status')
+except Exception:
+    # Do not print exceptions, HTTP bodies, cookies or credentials.
+    print(f'[ERROR] Проверка учётных данных 3x-ui не пройдена: {stage}.', file=sys.stderr)
+    raise SystemExit(1)
+finally:
+    if logged_in:
+        try:
+            request('logout', {}, csrf)
+        except Exception:
+            pass
+PY
+}
+
 xui_compatibility_gate(){
   local port="$1" path="$2" token="$3" name="$4" uuid="$5" client="$6"
   local api code list_json options_json client_json encoded
@@ -586,6 +689,8 @@ cleanup_xui_fresh_attempt(){
 install_xui_stack(){
   local tag="$1" port="$2" base="$3" path="$4" user="$5" pass="$6" name="$7" uuid="$8" client="$9" source="${10}" token
   install_3xui_version "$tag" "$port" "$base" "$user" "$pass" "$source" || return 1
+  info "Проверяю логин в БД и вход в панель 3x-ui"
+  xui_credentials_gate "$port" "$path" "$user" "$pass" || return 1
   token=$(api_token) || return 1
   create_inbound "$port" "$path" "$token" "$name" "$uuid" "$client" || { unset token; return 1; }
   xui_compatibility_gate "$port" "$path" "$token" "$name" "$uuid" "$client" || { unset token; return 1; }
@@ -802,7 +907,7 @@ offer_add_clients(){
 }
 
 main(){
-  need_root; need_tty; check_os; existing_guard
+  need_root; init_log; need_tty; check_os; existing_guard
   if ! command -v curl >/dev/null || ! command -v python3 >/dev/null; then
     apt-get update
     apt-get install -y curl ca-certificates python3
@@ -820,7 +925,7 @@ main(){
   panel_base="dashboard-$key"; panel_path="/$panel_base/"
   panel_port=$(free_panel_port) || die "Нет свободного порта панели."
   client_name="default@$domain"
-  prompt_nonempty xuser "Логин 3x-ui: "
+  prompt_panel_username xuser
   prompt_secret xpass "Пароль 3x-ui"
   echo "Basic Auth логин: $BASIC_USER"
   prompt_secret bpass "Пароль Basic Auth"
@@ -844,6 +949,7 @@ main(){
   install_xui_with_fallback "$panel_port" "$panel_base" "$panel_path" "$xuser" "$xpass" "$key" "$uuid" "$client_name" \
     || die "Не удалось установить совместимую версию 3x-ui."
   xui_version="$XUI_ACTIVE_TAG"
+  # Upstream result contains plaintext credentials; removal here is intentional.
   rm -f /etc/x-ui/install-result.env
 
   basic_auth "$bpass"
@@ -856,4 +962,6 @@ main(){
   offer_add_clients
 }
 
-main "$@"
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+  main "$@"
+fi

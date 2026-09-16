@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.1.7-dev — 2026-09-16
+
+Fresh-install credential validation and small installer fixes.
+
+- Reject malformed/non-ASCII panel usernames before installation; preserve case and require explicit re-entry rather than silently stripping characters.
+- Add a read-only byte-exact username check and a real localhost login check with CSRF/cookies before accepting a 3x-ui installation. A failed check enters the existing fresh-install fallback flow; it never resets credentials on a live node.
+- Verify session-authenticated API access, refuse redirects, bypass proxy environment settings and avoid repeating rejected login attempts. Passwords, cookies and response bodies are not printed by this check.
+- Move root validation ahead of log-file creation; diagnostics now show the detected SSH port rather than hard-coded port 22.
+- Remove the unused `normalize_path` function and unnecessary `python3-certbot-nginx` dependency; certificate issuance remains webroot-based.
+- Document the intentional removal of upstream `install-result.env` after successful setup. Its absence is not an upstream failure.
+- Add offline regression tests using a temporary SQLite database and local HTTP panel stand-in.
+- Client helper remains `0.1.6-dev`; known-good remains `v3.8.0`. This installer version still needs a fresh-VPS test.
+
 ## 0.1.6-dev — 2026-09-16
 
 Bulk-client input hardening.

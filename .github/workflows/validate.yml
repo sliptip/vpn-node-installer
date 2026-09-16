@@ -4,10 +4,12 @@ on:
   push:
     paths:
       - install.sh
+      - tests/test_installer.py
       - .github/workflows/validate.yml
   pull_request:
     paths:
       - install.sh
+      - tests/test_installer.py
       - .github/workflows/validate.yml
 
 permissions:
@@ -29,9 +31,12 @@ jobs:
           sudo apt-get install -y shellcheck
           shellcheck --severity=error install.sh
 
+      - name: Offline credential regression tests
+        run: python3 -m unittest discover -s tests -v
+
       - name: Required invariants
         run: |
-          grep -Fq 'VERSION="0.1.6-dev"' install.sh
+          grep -Fq 'VERSION="0.1.7-dev"' install.sh
           grep -Fq 'local VERSION=""' install.sh
           grep -Fq 'WS_PATH="/client/api/v2"' install.sh
           grep -Fq 'XRAY_PORT=10000' install.sh

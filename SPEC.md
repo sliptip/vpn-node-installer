@@ -35,6 +35,8 @@ The domain-key derivation intentionally means “label immediately before the TL
 
 The fresh installer asks for the node FQDN and the panel / Basic Auth credentials. If upstream has a newer stable 3x-ui than the known-good tag, it also offers a version choice. After a successful install it offers to run the bulk client helper. Declining either optional prompt uses the safe default and does not invalidate the completed node.
 
+Panel username input is restricted to 1–64 ASCII characters: the first character is alphanumeric; subsequent characters may also be `.`, `_`, `@`, `+`, or `-`. Invalid bytes, Cyrillic, whitespace and control characters trigger a new prompt without normalization or silent repair. Case is preserved.
+
 ## Generated / detected values
 
 - random free panel port in `20000..60000`
@@ -74,6 +76,10 @@ Before a selected release is accepted, the installer requires the 3x-ui pieces t
 - installed x-ui binary and SQLite DB exist
 - panel can be rebound to `127.0.0.1` on the requested port/path
 - subscription listener remains disabled and port 2096 is absent
+- stored username matches the requested ASCII bytes exactly in a read-only SQLite check
+- a real localhost login with the supplied password succeeds using session cookies and CSRF
+- the resulting session can access `/panel/api/server/status` without an API token
+- the login check bypasses environment proxies, refuses HTTP redirects, never retries a credential rejection and attempts logout afterward
 - local authenticated panel API is reachable
 - API token can be obtained
 - the required VLESS/WebSocket inbound can be created through the API
@@ -96,6 +102,8 @@ Existing completed nodes are never automatically upgraded or downgraded by this 
 - built-in subscription listener disabled
 
 The initial inbound is created through the localhost 3x-ui API instead of hand-inserting the inbound row.
+
+The upstream `/etc/x-ui/install-result.env` is intentionally deleted after a successful compatibility gate because it contains plaintext credentials. Its absence after installation is expected. The credential gate does not print secrets or response bodies and keeps its password out of process arguments and files. Upstream installation output still exposes its own credential summary in the terminal; redacting that output remains separate work.
 
 ## WebSocket inbound
 
