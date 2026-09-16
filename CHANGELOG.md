@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.1.8-dev — 2026-09-16
+
+DNS timeout handling and separate validated/emergency 3x-ui versions.
+
+- Classify dig transport failures explicitly instead of firing a misleading fatal ERR trap inside subshells. Preserve DNS response status and authoritative flags; a timeout is never treated as an empty AAAA answer.
+- Offer explicit `[y/N]` certificate continuation when some authoritative NS are unreachable, at least one authoritative NS and all public resolvers confirm the required records, and no response conflicts. Wrong A, existing AAAA, CNAME, DNS errors and non-authoritative responses block this path.
+- Reuse one DNS snapshot for evaluation/display and include query duration in the wait timer.
+- Set `XUI_KNOWN_GOOD=v3.8.5` as the validated choice; continue discovering and offering newer latest stable releases. Retain the archived emergency version separately as `XUI_FALLBACK_TAG=v3.8.0`.
+- Fresh-install fallback: chosen upstream → validated upstream when not already attempted → emergency upstream → emergency mirror. No archive of `v3.8.5` is created.
+- Add offline DNS/confirmation/version-selection/fallback regression coverage. Client helper stays `0.1.6-dev`; a full `0.1.8-dev` VPS run is still pending.
+
 ## 0.1.7-dev — 2026-09-16
 
 Fresh-install credential validation and small installer fixes.

@@ -34,7 +34,7 @@ The domain-key derivation intentionally means “label immediately before the TL
 
 ## Interactive input
 
-The fresh installer asks for the node FQDN and the panel / Basic Auth credentials. If upstream has a newer stable 3x-ui than the known-good tag, it also offers a version choice. After a successful install it offers to run the bulk client helper. Declining either optional prompt uses the safe default and does not invalidate the completed node.
+The fresh installer asks for the node FQDN and the panel / Basic Auth credentials. If upstream has a newer stable 3x-ui than the latest validated tag, it also offers a version choice. After a successful install it offers to run the bulk client helper. Declining either optional prompt uses the safe default and does not invalidate the completed node.
 
 Panel username input is restricted to 1–64 ASCII characters: the first character is alphanumeric; subsequent characters may also be `.`, `_`, `@`, `+`, or `-`. Invalid bytes, Cyrillic, whitespace and control characters trigger a new prompt without normalization or silent repair. Case is preserved.
 
@@ -57,22 +57,18 @@ Pinned fallback emergency mirror: `https://github.com/sliptip/3x-ui`. The mirror
 
 The latest successfully tested 3x-ui release (last known good) is **`v3.8.5`**. On 2026-09-16, installer **`0.1.7-dev`** with client helper **`0.1.6-dev`** completed a clean Ubuntu 24.04 LTS x64 deployment: credential/session verification, browser panel login, client creation, final installer checks, certificate renewal dry-run and real external VPN use were confirmed.
 
-The existing code variable `XUI_KNOWN_GOOD` retains its historical name and value **`v3.8.0`** as the pinned fallback and default-choice baseline. That version passed the first clean-VPS end-to-end test on 2026-09-15 and has an archived release asset. The 2026-09-16 decision updates the documented validation status only: do not archive `v3.8.5` or change fallback/default behavior. Replacing the reserved version will be considered separately after a substantial update.
-
-In the version-selection rules below, “known-good” refers to that pinned fallback variable, not the latest successfully tested release.
+As of installer `0.1.8-dev`, version roles are separate: `XUI_KNOWN_GOOD=v3.8.5` is the last fully validated release; `XUI_FALLBACK_TAG=v3.8.0` is the archived emergency version. No `v3.8.5` mirror release is required or created.
 
 Fresh-install version selection:
 
-1. Resolve the current GitHub latest stable release. Pre-release/dev tags are not candidates.
-2. If latest cannot be resolved, select known-good.
-3. If latest equals known-good, install it without another prompt.
-4. If latest is newer, offer:
-   - try the newer stable with automatic fresh-install fallback to known-good;
-   - install known-good immediately. This is the default when the operator presses Enter.
-5. A candidate's installer script is fetched from that exact release tag, not from floating `main`, and the same tag is passed to the installer.
-6. Newer candidates are attempted only from the official upstream. Known-good is attempted from official upstream first; if that fresh-install attempt fails, the installer cleans it and retries the exact `v3.8.0` from `sliptip/3x-ui`.
-7. Mirror mode rewrites the tagged upstream installer's repository/release URLs to `sliptip/3x-ui`, so its archived amd64 asset is actually used. The archived `.sha256` must contain the project's pinned known-good digest before mirror installation starts.
-8. A successful candidate on one node does not automatically change `XUI_KNOWN_GOOD` in the repository.
+1. Resolve latest stable from official upstream; prerelease/dev tags are excluded.
+2. If latest cannot be resolved or is older than the validated version, choose `v3.8.5`.
+3. If latest equals `v3.8.5`, install it without a duplicate choice.
+4. If latest is newer, offer latest or the validated `v3.8.5`; Enter selects the validated version.
+5. Every attempt uses the exact release-tag installer and passes that same tag.
+6. After failure, clean only the unsuccessful fresh-install attempt and try the next source/version: selected upstream → validated upstream (unless already tried) → emergency `v3.8.0` upstream → emergency `v3.8.0` mirror. Stop at the first successful compatibility gate.
+7. The mirror is allowed only for `XUI_FALLBACK_TAG`; its repository/release URLs are rewritten to `sliptip/3x-ui` and its checksum is checked against `XUI_FALLBACK_AMD64_SHA256`.
+8. Neither the validated nor the emergency version is automatically changed by a successful deployment.
 
 ### 3x-ui compatibility gate
 
@@ -93,9 +89,9 @@ Before a selected release is accepted, the installer requires the 3x-ui pieces t
 - `/clients/list`, `/inbounds/options`, and `/clients/get/:email` return compatible successful responses
 - the client is attached to the expected VLESS inbound
 
-If a newer candidate fails installation or this gate, the installer may fall back only while the node is still a **fresh install**. It stops/disables the failed x-ui service, removes the x-ui files/database created by that failed attempt, and performs a clean tagged install of known-good `v3.8.0`. It does not attempt to downgrade an already-used database in place.
+If a newer candidate fails installation or this gate, the installer may fall back only while the node is still a **fresh install**. It stops/disables the failed x-ui service, removes the x-ui files/database created by that failed attempt, and performs a clean tagged install of the next version/source in the fallback chain. It does not attempt to downgrade an already-used database in place.
 
-If both official known-good and the verified `sliptip/3x-ui` mirror attempt fail, installation stops rather than claiming success. The mirror retry is also fresh-install-only; it is never used to downgrade an existing completed node.
+If all applicable upstream attempts and the verified emergency `sliptip/3x-ui` mirror attempt fail, installation stops rather than claiming success. The mirror retry is also fresh-install-only; it is never used to downgrade an existing completed node.
 
 Existing completed nodes are never automatically upgraded or downgraded by this mechanism. The actual accepted tag is stored as `XUI_VERSION` in `/etc/vpn-node-installer/state.env` and printed in the final summary.
 
@@ -123,13 +119,14 @@ nginx supplies the WebSocket upgrade headers plus `Host`, `X-Real-IP`, `X-Forwar
 
 ## DNS readiness
 
-1. Find authoritative DNS for the FQDN.
-2. Every authoritative server must return exactly the VPS IPv4 for A.
-3. Authoritative AAAA must be empty.
-4. Check `1.1.1.1`, `8.8.8.8`, and `9.9.9.9` with the same rules.
-5. Poll every 30 seconds for up to 10 minutes.
-6. If authoritative DNS is correct but public cache remains stale, offer wait / try certificate / exit.
-7. If authoritative DNS itself is wrong, do not offer certificate issuance.
+1. Discover authoritative NS, query each over IPv4 with bounded timeouts, and require authoritative `aa` responses.
+2. For every responding resolver, require status NOERROR, exactly the expected IPv4 in A, no CNAME, and an empty successful AAAA answer. Never interpret a query timeout as absence of AAAA.
+3. Query `1.1.1.1`, `8.8.8.8`, and `9.9.9.9` with the same A/AAAA rules (without the `aa` requirement).
+4. Automatic acceptance requires all authoritative NS and all public resolvers to pass.
+5. A partial-authority exception is offered only if at least one authoritative NS passes, at least one authoritative NS is unreachable, all public resolvers pass, and no observed answer contradicts the requirements. Continue only on explicit `y`/`Y`; Enter declines. Certificate issuance still performs independent validation.
+6. Wrong/missing A, existing AAAA, CNAME, DNS error responses, or missing authoritative flags block the exception. Missing NS discovery or unavailable public resolvers also block it.
+7. Query transport failures are classified as unavailable and do not invoke the fatal ERR trap. Snapshot output reuses the evaluated responses, rather than querying again for display.
+8. Wait 30 seconds between snapshots; use elapsed shell time (including DNS calls) for the 600-second wait window. At the end, offer another wait window or exit. Declining the partial exception does not repeat its prompt within that window.
 
 ## Public exposure
 

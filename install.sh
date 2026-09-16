@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-VERSION="0.1.7-dev"
+VERSION="0.1.8-dev"
 WS_PATH="/client/api/v2"
 XRAY_PORT=10000
 BASIC_USER="admin"
@@ -17,8 +17,9 @@ STATIC_ROOT="/var/www/vpn-node-static"
 HTPASSWD="/etc/nginx/.htpasswd"
 XUI_UPSTREAM_REPO="MHSanaei/3x-ui"
 XUI_MIRROR_REPO="sliptip/3x-ui"
-XUI_KNOWN_GOOD="v3.8.0"
-XUI_KNOWN_GOOD_AMD64_SHA256="236b837627520f0c4ae4134dc6a34ea5e294b69e158879795fe8cd51c5f3582c"
+XUI_KNOWN_GOOD="v3.8.5"
+XUI_FALLBACK_TAG="v3.8.0"
+XUI_FALLBACK_AMD64_SHA256="236b837627520f0c4ae4134dc6a34ea5e294b69e158879795fe8cd51c5f3582c"
 XUI_RELEASES_LATEST="https://github.com/MHSanaei/3x-ui/releases/latest"
 XUI_RAW_BASE="https://raw.githubusercontent.com/MHSanaei/3x-ui"
 XUI_MIRROR_RAW_BASE="https://raw.githubusercontent.com/sliptip/3x-ui"
@@ -26,7 +27,6 @@ CLIENT_HELPER_URL="https://raw.githubusercontent.com/sliptip/vpn-node-installer/
 CLIENT_HELPER_BIN="/usr/local/sbin/vpn-clients"
 XUI_SELECTED_TAG="$XUI_KNOWN_GOOD"
 XUI_ACTIVE_TAG=""
-XUI_FALLBACK_ENABLED=0
 
 log(){ printf '[%s] %s\n' "$(date -Is)" "$*" >>"$LOG"; }
 info(){ printf '\n==> %s\n' "$*"; log "$*"; }
@@ -171,7 +171,6 @@ choose_xui_version(){
   local latest="" choice=""
   latest=$(resolve_latest_xui_tag || true)
   XUI_SELECTED_TAG="$XUI_KNOWN_GOOD"
-  XUI_FALLBACK_ENABLED=0
 
   if [[ -z "$latest" ]]; then
     warn "Не удалось определить latest stable 3x-ui. Использую проверенную $XUI_KNOWN_GOOD."
@@ -191,7 +190,6 @@ choose_xui_version(){
     read -r -p "Выберите [1/2]: " choice
     if [[ "$choice" == 1 ]]; then
       XUI_SELECTED_TAG="$latest"
-      XUI_FALLBACK_ENABLED=1
     fi
     return 0
   fi
@@ -296,67 +294,146 @@ configure_ufw(){
   ufw --force enable
 }
 
+# Always returns a classified result, not an expected network failure status.
+# A timeout must never be mistaken for an empty AAAA answer.
+dns_query(){
+  local server="$1" kind="$2" domain="$3" authoritative="${4:-0}" raw
+  local -a args=(-4 +time=3 +tries=1 +noall +comments +answer)
+  [[ -z "$server" ]] || args+=("@$server")
+  if ! raw=$(dig "${args[@]}" "$domain" "$kind" 2>/dev/null); then
+    printf 'UNAVAILABLE|нет ответа DNS\n'
+    return 0
+  fi
+  printf '%s\n' "$raw" | python3 -c '
+import re, sys
+kind, authoritative = sys.argv[1:]
+raw = sys.stdin.read()
+status = re.search(r"status:\s*([A-Z0-9]+)", raw)
+if status is None or status.group(1) != "NOERROR":
+    print("INVALID|" + (status.group(1) if status else "некорректный ответ DNS"))
+    raise SystemExit(0)
+flags = re.search(r";; flags:\s*([^;]+);", raw)
+if authoritative == "1" and (not flags or "aa" not in flags.group(1).split()):
+    print("INVALID|ответ не авторитетный")
+    raise SystemExit(0)
+records = [line.split() for line in raw.splitlines() if line and not line.startswith(";")]
+if any(len(row) >= 5 and row[3] == "CNAME" for row in records):
+    print("INVALID|CNAME вместо прямой записи")
+    raise SystemExit(0)
+values = sorted({row[4].rstrip(".") for row in records if len(row) >= 5 and row[3] == kind})
+print("OK|" + ",".join(values))
+' "$kind" "$authoritative"
+}
+
 authoritative_ns(){
-  local n="$1"; local -a a=()
+  local n="$1" result
   while [[ "$n" == *.* ]]; do
-    mapfile -t a < <(dig +short NS "$n" | sed 's/\.$//' | sort -u)
-    ((${#a[@]})) && { printf '%s\n' "${a[@]}"; return; }
+    result=$(dns_query "" NS "$n") || return 1
+    if [[ "$result" == OK\|* && -n "${result#*|}" ]]; then
+      tr ',' '\n' <<<"${result#*|}"
+      return 0
+    fi
     n="${n#*.}"
   done
   return 1
 }
 
-auth_dns_ok(){
-  local d="$1" expected="$2" ns v6; local -a nss ans
-  mapfile -t nss < <(authoritative_ns "$d" || true)
-  ((${#nss[@]})) || return 1
-  for ns in "${nss[@]}"; do
-    mapfile -t ans < <(dig +short @"$ns" A "$d" | sort -u)
-    ((${#ans[@]}==1)) && [[ "${ans[0]}" == "$expected" ]] || return 1
-    v6=$(dig +short @"$ns" AAAA "$d" | head -n1); [[ -z "$v6" ]] || return 1
+dns_server_state(){
+  local domain="$1" expected="$2" server="$3" authoritative="$4" a aaaa detail
+  a=$(dns_query "$server" A "$domain" "$authoritative") || return 1
+  aaaa=$(dns_query "$server" AAAA "$domain" "$authoritative") || return 1
+  detail="A=${a#*|} AAAA=${aaaa#*|}"
+  # Any observed contradiction blocks bypass, even if the other query times out.
+  if [[ "$a" == INVALID\|* || "$aaaa" == INVALID\|* ]] ||
+     [[ "$a" == OK\|* && "${a#*|}" != "$expected" ]] ||
+     [[ "$aaaa" == OK\|* && -n "${aaaa#*|}" ]]; then
+    printf 'BLOCKED|%s\n' "$detail"
+  elif [[ "$a" == UNAVAILABLE\|* || "$aaaa" == UNAVAILABLE\|* ]]; then
+    printf 'UNAVAILABLE|%s\n' "$detail"
+  elif [[ "$a" == "OK|$expected" && "$aaaa" == 'OK|' ]]; then
+    printf 'GOOD|%s\n' "$detail"
+  else
+    printf 'BLOCKED|%s\n' "$detail"
+  fi
+}
+
+dns_snapshot(){
+  local domain="$1" expected="$2" names="" server result
+  local -a nss=()
+  DNS_AUTH_GOOD=0 DNS_AUTH_UNAVAILABLE=0 DNS_AUTH_TOTAL=0 DNS_PUBLIC_GOOD=0 DNS_BLOCKED=0
+  DNS_LINES=("Authoritative:")
+  if names=$(authoritative_ns "$domain"); then
+    mapfile -t nss <<<"$names"
+  fi
+  DNS_AUTH_TOTAL=${#nss[@]}
+  if ((DNS_AUTH_TOTAL == 0)); then
+    DNS_BLOCKED=1
+    DNS_LINES+=("  Не удалось определить авторитетные NS.")
+  fi
+  for server in "${nss[@]}"; do
+    result=$(dns_server_state "$domain" "$expected" "$server" 1) || return 1
+    case "$result" in
+      GOOD\|*) DNS_AUTH_GOOD=$((DNS_AUTH_GOOD+1)) ;;
+      UNAVAILABLE\|*) DNS_AUTH_UNAVAILABLE=$((DNS_AUTH_UNAVAILABLE+1)) ;;
+      *) DNS_BLOCKED=1 ;;
+    esac
+    DNS_LINES+=("  $server: ${result%%|*} — ${result#*|}")
+  done
+  DNS_LINES+=("Public resolvers:")
+  for server in 1.1.1.1 8.8.8.8 9.9.9.9; do
+    result=$(dns_server_state "$domain" "$expected" "$server" 0) || return 1
+    case "$result" in
+      GOOD\|*) DNS_PUBLIC_GOOD=$((DNS_PUBLIC_GOOD+1)) ;;
+      UNAVAILABLE\|*) : ;;
+      *) DNS_BLOCKED=1 ;;
+    esac
+    DNS_LINES+=("  $server: ${result%%|*} — ${result#*|}")
   done
 }
 
-public_dns_ok(){
-  local d="$1" expected="$2" r v6; local -a ans
-  for r in 1.1.1.1 8.8.8.8 9.9.9.9; do
-    mapfile -t ans < <(dig +short @"$r" A "$d" | sort -u)
-    ((${#ans[@]}==1)) && [[ "${ans[0]}" == "$expected" ]] || return 1
-    v6=$(dig +short @"$r" AAAA "$d" | head -n1); [[ -z "$v6" ]] || return 1
-  done
+print_dns(){ printf '%s\n' "${DNS_LINES[@]}"; }
+
+dns_ready(){
+  ((DNS_BLOCKED == 0 && DNS_AUTH_TOTAL > 0 && DNS_AUTH_GOOD == DNS_AUTH_TOTAL && DNS_PUBLIC_GOOD == 3))
 }
 
-print_dns(){
-  local d="$1" ns r; local -a nss
-  mapfile -t nss < <(authoritative_ns "$d" || true)
-  echo "Authoritative:"
-  for ns in "${nss[@]}"; do printf '  %-28s A=%s AAAA=%s\n' "$ns" "$(dig +short @"$ns" A "$d" | paste -sd, -)" "$(dig +short @"$ns" AAAA "$d" | paste -sd, -)"; done
-  echo "Public resolvers:"
-  for r in 1.1.1.1 8.8.8.8 9.9.9.9; do printf '  %-28s A=%s AAAA=%s\n' "$r" "$(dig +short @"$r" A "$d" | paste -sd, -)" "$(dig +short @"$r" AAAA "$d" | paste -sd, -)"; done
+dns_partial_ready(){
+  ((DNS_BLOCKED == 0 && DNS_AUTH_GOOD > 0 && DNS_AUTH_UNAVAILABLE > 0 && DNS_PUBLIC_GOOD == 3))
 }
 
 wait_dns(){
-  local d="$1" ip="$2" waited=0 limit=600 step=30 c
+  local d="$1" ip="$2" started=$SECONDS elapsed=0 limit=600 step=30 c
+  local last_print=-120 partial_offered=0 printed
   info "Жду DNS: A=${ip}, AAAA отсутствует"
   while true; do
-    if auth_dns_ok "$d" "$ip" && public_dns_ok "$d" "$ip"; then print_dns "$d"; return; fi
-    ((waited==0 || waited%120==0)) && print_dns "$d"
-    if ((waited>=limit)); then
-      if ! auth_dns_ok "$d" "$ip"; then
-        warn "Authoritative DNS ещё не готов или существует AAAA."
-        read -r -p "Ждать ещё 10 минут? [Y/n]: " c
-        [[ "$c" =~ ^[Nn]$ ]] && exit 3
-        waited=0; continue
-      fi
-      echo "Authoritative DNS правильный, но публичный кэш ещё старый."
-      echo "1) Ждать ещё 10 минут (рекомендуется)"
-      echo "2) Попробовать выпуск сертификата"
-      echo "3) Выйти"
-      read -r -p "Выберите [1/2/3]: " c
-      case "$c" in 2) return;; 3) exit 3;; *) waited=0;; esac
+    dns_snapshot "$d" "$ip"
+    elapsed=$((SECONDS-started))
+    if dns_ready; then print_dns; return 0; fi
+    printed=0
+    if ((elapsed-last_print >= 120)); then
+      print_dns; last_print=$elapsed; printed=1
     fi
-    printf '\rDNS: %d/%d сек...' "$waited" "$limit"
-    sleep "$step"; waited=$((waited+step))
+    if dns_partial_ready && ((partial_offered == 0)); then
+      if ((printed == 0)); then print_dns; fi
+      warn "Часть авторитетных NS не отвечает. Хотя бы один NS и все публичные DNS подтвердили A и отсутствие AAAA; противоречий в полученных ответах нет."
+      read -r -p "Попробовать выпуск сертификата при недоступном NS? [y/N]: " c
+      if [[ "$c" =~ ^[Yy]$ ]]; then
+        log "DNS partial-authority override explicitly confirmed"
+        return 0
+      fi
+      partial_offered=1
+    fi
+    elapsed=$((SECONDS-started))
+    if ((elapsed >= limit)); then
+      if ((printed == 0)); then print_dns; fi
+      warn "DNS пока не прошёл проверки: есть недоступные серверы, неверные ответы A или неподтверждённое отсутствие AAAA."
+      read -r -p "Ждать ещё 10 минут? [Y/n]: " c
+      if [[ "$c" =~ ^[Nn]$ ]]; then exit 3; fi
+      started=$SECONDS; last_print=-120; partial_offered=0
+      continue
+    fi
+    printf 'DNS: %d/%d сек (с учётом времени запросов). Следующая проверка через %d сек.\n' "$elapsed" "$limit" "$step"
+    sleep "$step"
   done
 }
 
@@ -419,18 +496,18 @@ xui_installer_url(){
   printf '%s/%s/install.sh\n' "$base" "$tag"
 }
 
-verify_xui_mirror_known_good(){
+verify_xui_mirror_fallback(){
   local sums expected
   sums=$(mktemp /root/xui-mirror-sum.XXXXXX) || return 1
   if ! curl -fsSL --connect-timeout 10 --max-time 60 \
-    "https://github.com/${XUI_MIRROR_REPO}/releases/download/${XUI_KNOWN_GOOD}/x-ui-linux-amd64.tar.gz.sha256" \
+    "https://github.com/${XUI_MIRROR_REPO}/releases/download/${XUI_FALLBACK_TAG}/x-ui-linux-amd64.tar.gz.sha256" \
     -o "$sums"; then
     rm -f "$sums"
     return 1
   fi
   expected=$(awk 'NR == 1 {print $1}' "$sums")
   rm -f "$sums"
-  [[ "$expected" == "$XUI_KNOWN_GOOD_AMD64_SHA256" ]]
+  [[ "$expected" == "$XUI_FALLBACK_AMD64_SHA256" ]]
 }
 
 prepare_xui_installer_source(){
@@ -447,8 +524,8 @@ install_3xui_version(){
   case "$source" in
     upstream) repo="$XUI_UPSTREAM_REPO" ;;
     mirror)
-      [[ "$tag" == "$XUI_KNOWN_GOOD" ]] || return 1
-      verify_xui_mirror_known_good || { warn "Mirror $XUI_MIRROR_REPO не прошёл проверку archived checksum для $XUI_KNOWN_GOOD."; return 1; }
+      [[ "$tag" == "$XUI_FALLBACK_TAG" ]] || return 1
+      verify_xui_mirror_fallback || { warn "Mirror $XUI_MIRROR_REPO не прошёл проверку archived checksum для $XUI_FALLBACK_TAG."; return 1; }
       repo="$XUI_MIRROR_REPO"
       ;;
     *) return 1 ;;
@@ -697,20 +774,20 @@ install_xui_stack(){
   unset token
 }
 
-install_known_good_with_source_fallback(){
+install_emergency_with_source_fallback(){
   local port="$1" base="$2" path="$3" user="$4" pass="$5" name="$6" uuid="$7" client="$8"
 
-  if install_xui_stack "$XUI_KNOWN_GOOD" "$port" "$base" "$path" "$user" "$pass" "$name" "$uuid" "$client" upstream; then
-    XUI_ACTIVE_TAG="$XUI_KNOWN_GOOD"
-    info "3x-ui $XUI_KNOWN_GOOD прошла compatibility gate из официального $XUI_UPSTREAM_REPO"
+  if install_xui_stack "$XUI_FALLBACK_TAG" "$port" "$base" "$path" "$user" "$pass" "$name" "$uuid" "$client" upstream; then
+    XUI_ACTIVE_TAG="$XUI_FALLBACK_TAG"
+    info "3x-ui $XUI_FALLBACK_TAG прошла compatibility gate из официального $XUI_UPSTREAM_REPO"
     return 0
   fi
 
-  warn "Официальная попытка $XUI_KNOWN_GOOD не удалась. Пробую сохранённый mirror $XUI_MIRROR_REPO."
+  warn "Официальная попытка $XUI_FALLBACK_TAG не удалась. Пробую сохранённый mirror $XUI_MIRROR_REPO."
   cleanup_xui_fresh_attempt || return 1
-  if install_xui_stack "$XUI_KNOWN_GOOD" "$port" "$base" "$path" "$user" "$pass" "$name" "$uuid" "$client" mirror; then
-    XUI_ACTIVE_TAG="$XUI_KNOWN_GOOD"
-    info "Mirror fallback успешен: 3x-ui $XUI_KNOWN_GOOD из $XUI_MIRROR_REPO"
+  if install_xui_stack "$XUI_FALLBACK_TAG" "$port" "$base" "$path" "$user" "$pass" "$name" "$uuid" "$client" mirror; then
+    XUI_ACTIVE_TAG="$XUI_FALLBACK_TAG"
+    info "Mirror fallback успешен: 3x-ui $XUI_FALLBACK_TAG из $XUI_MIRROR_REPO"
     return 0
   fi
 
@@ -721,8 +798,8 @@ install_xui_with_fallback(){
   local port="$1" base="$2" path="$3" user="$4" pass="$5" name="$6" uuid="$7" client="$8"
   local selected="$XUI_SELECTED_TAG"
 
-  if [[ "$selected" == "$XUI_KNOWN_GOOD" ]]; then
-    install_known_good_with_source_fallback "$port" "$base" "$path" "$user" "$pass" "$name" "$uuid" "$client"
+  if [[ "$selected" == "$XUI_FALLBACK_TAG" ]]; then
+    install_emergency_with_source_fallback "$port" "$base" "$path" "$user" "$pass" "$name" "$uuid" "$client"
     return
   fi
 
@@ -731,15 +808,22 @@ install_xui_with_fallback(){
     info "3x-ui $selected прошла compatibility gate из официального $XUI_UPSTREAM_REPO"
     return 0
   fi
+  warn "3x-ui $selected не прошла установку/compatibility gate."
+  cleanup_xui_fresh_attempt || return 1
 
-  if ((XUI_FALLBACK_ENABLED)); then
-    warn "3x-ui $selected не прошла установку/compatibility gate. Выполняю fresh-install fallback на $XUI_KNOWN_GOOD."
+  if [[ "$selected" != "$XUI_KNOWN_GOOD" && "$XUI_KNOWN_GOOD" != "$XUI_FALLBACK_TAG" ]]; then
+    info "Пробую последнюю проверенную 3x-ui $XUI_KNOWN_GOOD"
+    if install_xui_stack "$XUI_KNOWN_GOOD" "$port" "$base" "$path" "$user" "$pass" "$name" "$uuid" "$client" upstream; then
+      XUI_ACTIVE_TAG="$XUI_KNOWN_GOOD"
+      info "3x-ui $XUI_KNOWN_GOOD прошла compatibility gate из официального $XUI_UPSTREAM_REPO"
+      return 0
+    fi
+    warn "Последняя проверенная 3x-ui $XUI_KNOWN_GOOD не прошла установку/compatibility gate."
     cleanup_xui_fresh_attempt || return 1
-    install_known_good_with_source_fallback "$port" "$base" "$path" "$user" "$pass" "$name" "$uuid" "$client"
-    return
   fi
 
-  return 1
+  warn "Выполняю fresh-install fallback на резервную $XUI_FALLBACK_TAG."
+  install_emergency_with_source_fallback "$port" "$base" "$path" "$user" "$pass" "$name" "$uuid" "$client"
 }
 basic_auth(){
   local pass="$1"
