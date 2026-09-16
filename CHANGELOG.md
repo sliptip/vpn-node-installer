@@ -11,7 +11,9 @@ Fresh-install credential validation and small installer fixes.
 - Remove the unused `normalize_path` function and unnecessary `python3-certbot-nginx` dependency; certificate issuance remains webroot-based.
 - Document the intentional removal of upstream `install-result.env` after successful setup. Its absence is not an upstream failure.
 - Add offline regression tests using a temporary SQLite database and local HTTP panel stand-in.
-- Client helper remains `0.1.6-dev`; known-good remains `v3.8.0`. This installer version still needs a fresh-VPS test.
+- Validation completed on 2026-09-16: `0.1.7-dev` with 3x-ui `v3.8.5` passed a full clean Ubuntu 24.04 LTS x64 end-to-end test, including credential/session checks, browser login, client creation, final checks, certificate renewal dry-run and real VPN use confirmed by the operator.
+- Latest successfully tested 3x-ui release (last known good) is now `v3.8.5`. Client helper remains `0.1.6-dev`.
+- By explicit decision, the pinned fallback/default baseline and archived mirror stay at `v3.8.0`; `XUI_KNOWN_GOOD` retains that value. No `v3.8.5` release archive or installer behavior change is part of this status update.
 
 ## 0.1.6-dev — 2026-09-16
 

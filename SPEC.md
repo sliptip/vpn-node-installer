@@ -18,7 +18,8 @@
 - internal Xray TLS/security: `none`
 - Basic Auth username: `admin`
 - database: SQLite
-- current 3x-ui last-known-good tag: `v3.8.0`
+- latest successfully tested 3x-ui tag (last known good): `v3.8.5`
+- pinned automatic fallback / emergency mirror tag: `v3.8.0`
 
 ## Derived values
 
@@ -52,9 +53,13 @@ IPv6 is disabled at runtime and persistently. UFW is configured with `IPV6=no`. 
 
 Official upstream repository: `https://github.com/MHSanaei/3x-ui`.
 
-Known-good emergency mirror: `https://github.com/sliptip/3x-ui`. The mirror preserves tag `v3.8.0` and the Linux amd64 release asset. The archived amd64 SHA-256 is `236b837627520f0c4ae4134dc6a34ea5e294b69e158879795fe8cd51c5f3582c`.
+Pinned fallback emergency mirror: `https://github.com/sliptip/3x-ui`. The mirror preserves tag `v3.8.0` and the Linux amd64 release asset. The archived amd64 SHA-256 is `236b837627520f0c4ae4134dc6a34ea5e294b69e158879795fe8cd51c5f3582c`.
 
-The project keeps an explicit `XUI_KNOWN_GOOD` tag. It is currently **`v3.8.0`**, which was used for the first successful clean-VPS end-to-end test on 2026-09-15.
+The latest successfully tested 3x-ui release (last known good) is **`v3.8.5`**. On 2026-09-16, installer **`0.1.7-dev`** with client helper **`0.1.6-dev`** completed a clean Ubuntu 24.04 LTS x64 deployment: credential/session verification, browser panel login, client creation, final installer checks, certificate renewal dry-run and real external VPN use were confirmed.
+
+The existing code variable `XUI_KNOWN_GOOD` retains its historical name and value **`v3.8.0`** as the pinned fallback and default-choice baseline. That version passed the first clean-VPS end-to-end test on 2026-09-15 and has an archived release asset. The 2026-09-16 decision updates the documented validation status only: do not archive `v3.8.5` or change fallback/default behavior. Replacing the reserved version will be considered separately after a substantial update.
+
+In the version-selection rules below, “known-good” refers to that pinned fallback variable, not the latest successfully tested release.
 
 Fresh-install version selection:
 
