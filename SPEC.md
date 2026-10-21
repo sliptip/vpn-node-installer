@@ -19,7 +19,8 @@
 - Basic Auth username: `admin`
 - database: SQLite
 - preferred stable 3x-ui tag: `v3.10.2` (bundled Xray `26.10.10`)
-- latest successfully tested on VPS 3x-ui tag (last known good): `v3.8.5`
+- latest operator-confirmed VPS validation: `v3.10.2` with installer `0.2.0-dev`, 2026-10-21
+- retained historical rollback selection (`XUI_KNOWN_GOOD`): `v3.8.5`
 - pinned automatic fallback / emergency mirror tag: `v3.8.0`
 
 ## Derived values
@@ -56,7 +57,9 @@ Official upstream repository: `https://github.com/MHSanaei/3x-ui`.
 
 Pinned fallback emergency mirror: `https://github.com/sliptip/3x-ui`. The mirror preserves tag `v3.8.0` and the Linux amd64 release asset. The archived amd64 SHA-256 is `236b837627520f0c4ae4134dc6a34ea5e294b69e158879795fe8cd51c5f3582c`.
 
-The latest successfully tested 3x-ui release (last known good) is **`v3.8.5`**. On 2026-09-16, installer **`0.1.7-dev`** with client helper **`0.1.6-dev`** completed a clean Ubuntu 24.04 LTS x64 deployment: credential/session verification, browser panel login, client creation, final installer checks, certificate renewal dry-run and real external VPN use were confirmed.
+The latest operator-confirmed VPS validation is **`0.2.0-dev` / 3x-ui `v3.10.2` / VLESS XHTTP H3**, confirmed on **2026-10-21** after successful installation and external client use. The historical `XUI_KNOWN_GOOD=v3.8.5` selection remains available for rollback; this status update does not change release-selection behavior.
+
+Previously, on 2026-09-16, installer **`0.1.7-dev`** with client helper **`0.1.6-dev`** completed a clean Ubuntu 24.04 LTS x64 deployment: credential/session verification, browser panel login, client creation, final installer checks, certificate renewal dry-run and real external VPN use were confirmed.
 
 On the same date, **`0.1.8-dev`** with 3x-ui **`v3.8.5`** passed a full VPS deployment and end-to-end validation. The installation transcript confirms restart after a DNS-stage stop, explicit continuation with one unreachable authoritative NS, certificate issuance, credential/session verification, inbound/default client creation, final checks, certificate renewal dry-run and bulk client creation. The operator separately confirmed real VPN client use, server access and browser panel login.
 
@@ -67,7 +70,7 @@ Fresh-install version selection:
 1. Resolve latest stable from official upstream; prerelease/dev tags are excluded.
 2. Use `v3.10.2` as the preferred floor; if upstream latest is newer, use latest as the main candidate.
 3. If latest cannot be resolved, retain the preferred candidate and explain the fallback.
-4. Offer the main candidate or `v3.8.5`; Enter selects the main candidate. Historical known-good does not certify this new H3 installer.
+4. Offer the main candidate or `v3.8.5`; Enter selects the main candidate. The retained historical rollback choice is separate from the current v3.10.2 H3 validation.
 5. Every attempt uses the exact release-tag installer and passes that same tag.
 6. After failure, clean only the unsuccessful fresh-install attempt and try the next source/version: selected upstream → validated upstream (unless already tried) → emergency `v3.8.0` upstream → emergency `v3.8.0` mirror. Stop at the first successful compatibility gate.
 7. The mirror is allowed only for `XUI_FALLBACK_TAG`; its repository/release URLs are rewritten to `sliptip/3x-ui` and its checksum is checked against `XUI_FALLBACK_AMD64_SHA256`.
@@ -193,4 +196,4 @@ A real external client connection remains the final end-to-end acceptance test.
 
 The H3 smoke test validates TLS using the domain's certificate and cannot fall back to HTTP/2. It runs after the panel compatibility/fallback sequence and final Nginx setup. Failure stops installation without writing the completion marker; it does not trigger a panel downgrade. Temporary files/processes are cleaned up. Nginx stream-log flushing is not a success prerequisite.
 
-Local validation on 2026-10-21: 3x-ui v3.10.2 login/session, inbound/default client, helper API and bulkCreate/readback succeeded against the actual binary. The actual installer templates passed a VLESS/QUIC round trip with Xray 26.10.10 and Nginx 1.30.6, with HTTP/3.0 200 recorded by Nginx. This is not a clean VPS installation acceptance test; apt/systemd/UFW, public DNS/ACME and external UDP reachability still require that test. Historical VPS validation remains 0.1.8-dev / v3.8.5.
+Local validation on 2026-10-21: 3x-ui v3.10.2 login/session, inbound/default client, helper API and bulkCreate/readback succeeded against the actual binary. The actual installer templates passed a VLESS/QUIC round trip with Xray 26.10.10 and Nginx 1.30.6, with HTTP/3.0 200 recorded by Nginx. These local checks are recorded separately from VPS acceptance. Later on 2026-10-21, the operator confirmed successful installation and external VLESS/XHTTP/H3 client use for 0.2.0-dev / v3.10.2. VPS acceptance is complete based on that operator confirmation; no raw VPS transcript or separate live-server inspection is claimed in this status update. Historical validation of 0.1.8-dev / v3.8.5 remains recorded above.

@@ -12,7 +12,7 @@ Fresh installs move to VLESS/XHTTP stream-one over HTTP/3; preferred 3x-ui is v3
 - Remove new upstream systemd drop-ins when cleaning only a failed fresh-install attempt. Skip Certbot's random sleep during the final renewal dry-run.
 - Add offline transport/state/link tests and an optional real-binary QUIC integration test; retain credential, DNS and fallback regressions.
 - Local validation: actual 3x-ui v3.10.2 login/session, XHTTP inbound/default client, helper endpoints and bulkCreate/readback succeeded. Actual Xray 26.10.10 and Nginx 1.30.6 passed a VLESS round trip using installer templates, with HTTP/3.0 200 in Nginx.
-- Full clean-VPS installation and external H3 client acceptance for 0.2.0-dev remain pending. Existing servers are not migrated by this change.
+- VPS acceptance confirmed by the operator on 2026-10-21: 0.2.0-dev with 3x-ui v3.10.2 installed successfully and external VLESS/XHTTP/H3 client use worked. The previous pending-validation status is closed. Release-selection/fallback behavior is unchanged by this documentation update; existing servers are not migrated.
 
 ## 0.1.8-dev — 2026-09-16
 

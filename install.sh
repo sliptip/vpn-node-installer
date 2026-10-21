@@ -19,7 +19,7 @@ HTPASSWD="/etc/nginx/.htpasswd"
 XUI_UPSTREAM_REPO="MHSanaei/3x-ui"
 XUI_MIRROR_REPO="sliptip/3x-ui"
 XUI_PREFERRED="v3.10.2"
-# Last operator-validated panel release; the new H3 installer still needs a VPS acceptance test.
+# Retained WS-era rollback choice. Operator validated 0.2.0-dev / v3.10.2 / H3 on 2026-10-21.
 XUI_KNOWN_GOOD="v3.8.5"
 XUI_FALLBACK_TAG="v3.8.0"
 XUI_FALLBACK_AMD64_SHA256="236b837627520f0c4ae4134dc6a34ea5e294b69e158879795fe8cd51c5f3582c"
@@ -178,7 +178,7 @@ choose_xui_version(){
   fi
   [[ -n "$latest" ]] || warn "Latest stable недоступен; основной кандидат $XUI_PREFERRED."
   printf '\nОсновной релиз 3x-ui: %s\n' "$candidate"
-  printf 'Ранее проверенная версия панели: %s (новая H3-установка проверяется отдельно).\n' "$XUI_KNOWN_GOOD"
+  printf 'Ранее проверенная резервная версия панели: %s.\n' "$XUI_KNOWN_GOOD"
   echo "1) Установить $candidate (по умолчанию)"
   echo "2) Установить ранее проверенную $XUI_KNOWN_GOOD"
   read -r -p "Выберите [1/2]: " choice
