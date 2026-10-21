@@ -1,9 +1,12 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-VERSION="0.1.6-dev"
+VERSION="0.2.0-dev"
 XRAY_PORT=10000
-WS_PATH="/client/api/v2"
+TRANSPORT=ws
+TRANSPORT_PATH="/client/api/v2"
+CLIENT_ALPN="http/1.1"
+XHTTP_MODE="stream-one"
 STATE_DIR="/etc/vpn-node-installer"
 STATE_FILE="$STATE_DIR/state.env"
 XUI_BIN="/usr/local/x-ui/x-ui"
@@ -154,6 +157,27 @@ command -v sqlite3 >/dev/null || die "Не найден sqlite3."
 : "${PANEL_PORT:?В state.env нет PANEL_PORT}"
 : "${PANEL_PATH:?В state.env нет PANEL_PATH}"
 INBOUND="${INBOUND:-}"
+case "$TRANSPORT" in
+  ws|xhttp) ;;
+  *) die "Неизвестный транспорт в state.env: $TRANSPORT" ;;
+esac
+if [[ "$TRANSPORT" == xhttp ]]; then
+  [[ "$CLIENT_ALPN" == h3 && "$XHTTP_MODE" == stream-one ]] || die "Неверные параметры H3 в state.env."
+fi
+# Fail before creating clients if state does not describe the actual inbound.
+python3 - "$XUI_DB" "$XRAY_PORT" "$TRANSPORT" "$TRANSPORT_PATH" <<'PY'
+import json, sqlite3, sys
+conn=sqlite3.connect("file:"+sys.argv[1]+"?mode=ro", uri=True)
+rows=conn.execute("SELECT stream_settings,listen FROM inbounds WHERE protocol='vless' AND port=?", (int(sys.argv[2]),)).fetchall()
+conn.close()
+if len(rows)!=1: raise SystemExit("Inbound не найден однозначно")
+stream=json.loads(rows[0][0]); transport=sys.argv[3]
+settings=stream.get(transport+'Settings') or {}
+if rows[0][1]!='127.0.0.1' or stream.get('network')!=transport or settings.get('path')!=sys.argv[4]:
+    raise SystemExit("state.env не соответствует inbound; клиентские ссылки не созданы")
+if transport=='xhttp' and (settings.get('mode')!='stream-one' or stream.get('security')!='none'):
+    raise SystemExit("Inbound не соответствует XHTTP stream-one без внутреннего TLS")
+PY
 
 api_token(){
   local token
@@ -380,17 +404,18 @@ PY
 
 info "Добавлено клиентов: $created_count"
 printf '\nГотовые VLESS URL:\n'
-python3 - "$created_json" "$DOMAIN" "$WS_PATH" <<'PY'
+python3 - "$created_json" "$DOMAIN" "$TRANSPORT_PATH" "$TRANSPORT" "$CLIENT_ALPN" "$XHTTP_MODE" <<'PY'
 import json, sys, urllib.parse
-items_path, domain, ws_path = sys.argv[1:]
-items = json.load(open(items_path, encoding='utf-8'))
-path = urllib.parse.quote(ws_path, safe='')
+items_path, domain, transport_path, transport, alpn, mode = sys.argv[1:]
+with open(items_path, encoding='utf-8') as handle:
+    items = json.load(handle)
+params = dict(type=transport, encryption='none', security='tls', sni=domain, host=domain,
+              path=transport_path, alpn=alpn)
+if transport == 'xhttp':
+    params.update(mode=mode, x_padding_bytes='100-1000')
+query = urllib.parse.urlencode(params)
 for item in items:
     c = item['client']
     label = urllib.parse.quote(c['email'], safe='')
-    print(
-        f"vless://{c['id']}@{domain}:443"
-        f"?type=ws&encryption=none&security=tls&sni={domain}&host={domain}"
-        f"&path={path}&alpn=http%2F1.1#{label}"
-    )
+    print(f"vless://{c['id']}@{domain}:443?{query}#{label}")
 PY

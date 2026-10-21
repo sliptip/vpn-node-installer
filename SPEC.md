@@ -1,4 +1,4 @@
-# Specification — v0.1
+# Specification — v0.2
 
 ## Supported target
 
@@ -11,14 +11,15 @@
 ## Fixed values
 
 - protocol: VLESS
-- transport: WebSocket
-- external port: 443
-- internal Xray: `127.0.0.1:10000`
-- WS path: `/client/api/v2`
+- transport: XHTTP, stream-one; external TLS ALPN: h3 only
+- external port: 443/udp (VPN QUIC), 443/tcp (HTTPS)
+- internal Xray: `127.0.0.1:10001`
+- XHTTP path: `/client/api/v3`; xPaddingBytes: `100-1000`
 - internal Xray TLS/security: `none`
 - Basic Auth username: `admin`
 - database: SQLite
-- latest successfully tested 3x-ui tag (last known good): `v3.8.5`
+- preferred stable 3x-ui tag: `v3.10.2` (bundled Xray `26.10.10`)
+- latest successfully tested on VPS 3x-ui tag (last known good): `v3.8.5`
 - pinned automatic fallback / emergency mirror tag: `v3.8.0`
 
 ## Derived values
@@ -34,7 +35,7 @@ The domain-key derivation intentionally means “label immediately before the TL
 
 ## Interactive input
 
-The fresh installer asks for the node FQDN and the panel / Basic Auth credentials. If upstream has a newer stable 3x-ui than the latest validated tag, it also offers a version choice. After a successful install it offers to run the bulk client helper. Declining either optional prompt uses the safe default and does not invalidate the completed node.
+The fresh installer asks for the node FQDN and the panel / Basic Auth credentials. It offers the preferred/latest stable 3x-ui release or the previously VPS-validated panel version. Enter selects preferred/latest. After a successful install it offers to run the bulk client helper. Declining the bulk helper leaves the completed node usable.
 
 Panel username input is restricted to 1–64 ASCII characters: the first character is alphanumeric; subsequent characters may also be `.`, `_`, `@`, `+`, or `-`. Invalid bytes, Cyrillic, whitespace and control characters trigger a new prompt without normalization or silent repair. Case is preserved.
 
@@ -64,9 +65,9 @@ As of installer `0.1.8-dev`, version roles are separate: `XUI_KNOWN_GOOD=v3.8.5`
 Fresh-install version selection:
 
 1. Resolve latest stable from official upstream; prerelease/dev tags are excluded.
-2. If latest cannot be resolved or is older than the validated version, choose `v3.8.5`.
-3. If latest equals `v3.8.5`, install it without a duplicate choice.
-4. If latest is newer, offer latest or the validated `v3.8.5`; Enter selects the validated version.
+2. Use `v3.10.2` as the preferred floor; if upstream latest is newer, use latest as the main candidate.
+3. If latest cannot be resolved, retain the preferred candidate and explain the fallback.
+4. Offer the main candidate or `v3.8.5`; Enter selects the main candidate. Historical known-good does not certify this new H3 installer.
 5. Every attempt uses the exact release-tag installer and passes that same tag.
 6. After failure, clean only the unsuccessful fresh-install attempt and try the next source/version: selected upstream → validated upstream (unless already tried) → emergency `v3.8.0` upstream → emergency `v3.8.0` mirror. Stop at the first successful compatibility gate.
 7. The mirror is allowed only for `XUI_FALLBACK_TAG`; its repository/release URLs are rewritten to `sliptip/3x-ui` and its checksum is checked against `XUI_FALLBACK_AMD64_SHA256`.
@@ -85,8 +86,8 @@ Before a selected release is accepted, the installer requires the 3x-ui pieces t
 - the login check bypasses environment proxies, refuses HTTP redirects, never retries a credential rejection and attempts logout afterward
 - local authenticated panel API is reachable
 - API token can be obtained
-- the required VLESS/WebSocket inbound can be created through the API
-- Xray listens on `127.0.0.1:10000`
+- the required VLESS/XHTTP inbound can be created through the API
+- Xray listens on `127.0.0.1:10001`
 - the initial client and UUID can be read back
 - `/clients/list`, `/inbounds/options`, and `/clients/get/:email` return compatible successful responses
 - the client is attached to the expected VLESS inbound
@@ -108,16 +109,17 @@ The initial inbound is created through the localhost 3x-ui API instead of hand-i
 
 The upstream `/etc/x-ui/install-result.env` is intentionally deleted after a successful compatibility gate because it contains plaintext credentials. Its absence after installation is expected. The credential gate does not print secrets or response bodies and keeps its password out of process arguments and files. Upstream installation output still exposes its own credential summary in the terminal; redacting that output remains separate work.
 
-## WebSocket inbound
+## XHTTP/H3 transport and Nginx
 
-Required stream settings:
-
-- network `ws`
-- path `/client/api/v2`
-- internal security `none`
-- `trustedXForwardedFor: ["X-Real-IP"]`
-
-nginx supplies the WebSocket upgrade headers plus `Host`, `X-Real-IP`, `X-Forwarded-For`, and `X-Forwarded-Proto`.
+- Xray: `network=xhttp`, `mode=stream-one`, `path=/client/api/v3`, `security=none`, empty host (validated by public TLS/Nginx), `xPaddingBytes=100-1000`.
+- `trustedXForwardedFor: ["X-Real-IP"]`; Nginx supplies Host and replaces X-Real-IP/X-Forwarded-For with the actual peer address.
+- Nginx stable from official nginx.org apt repository for Ubuntu noble, amd64, priority 900; verify signing fingerprint `573BFD6B3D8FBC641079A6ABABF5BD827BD9BF62` and compiled http_v3/http_v2/http_sub modules.
+- Clean-host main config uses www-data, explicit sites-enabled/conf.d includes and writable private temp directories. Existing custom vhosts block the fresh installer.
+- Public TLS/QUIC on UDP/443, HTTPS on TCP/443; `http3 on`, `quic_retry on`, Alt-Svc advertising h3. IPv4 only.
+- XHTTP location proxies using `grpc_pass grpc://127.0.0.1:10001` (HTTP/2 cleartext); unlimited request body, 5m body/send timeout, 315s read timeout.
+- No WebSocket VPN inbound/location is created. Panel proxy upgrade headers remain for panel features.
+- VPN access log contains only `$server_protocol $status`, never request paths/queries.
+- Client URLs specify `type=xhttp`, `mode=stream-one`, `alpn=h3`, `security=tls`, domain SNI/Host, path and padding; H3-capable Xray clients are required.
 
 ## DNS readiness
 
@@ -137,8 +139,9 @@ Expected public listeners:
 - current SSH server port/tcp
 - 80/tcp nginx
 - 443/tcp nginx
+- 443/udp nginx QUIC; provider firewall must also permit it
 
-The panel port, Xray port 10000, and subscription port 2096 must not be publicly exposed.
+The panel port, Xray port 10001, and subscription port 2096 must not be publicly exposed.
 
 ## Favicon policy
 
@@ -166,11 +169,13 @@ Normalization rules:
 
 The effective client name is `<normalized-name>@<node-domain>`. The original email domain is discarded.
 
-The helper reads the installed node state from `/etc/vpn-node-installer/state.env`, resolves the VLESS inbound at port 10000, and creates clients through the local 3x-ui client API rather than editing client rows directly.
+The helper reads the installed node state from `/etc/vpn-node-installer/state.env`, reads transport/path/port/ALPN/mode from state and verifies the VLESS inbound against SQLite before any mutation, and creates clients through the local 3x-ui client API rather than editing client rows directly.
 
 Existing clients with the same effective name are left untouched and reported during preview. Every new client receives its own generated UUID v4. Immediately before bulk creation the helper makes a root-only SQLite backup under `/etc/vpn-node-installer/backups/`.
 
-After creation, the helper verifies each new client and its inbound attachment, then confirms that Xray still listens on `127.0.0.1:10000`.
+Legacy state without transport fields retains WS, port 10000, `/client/api/v2`, ALPN `http/1.1`. New state records XHTTP, port 10001, `/client/api/v3`, stream-one, ALPN h3. A mismatched manually migrated node fails closed; it is not silently guessed or rewritten.
+
+After creation, the helper verifies each new client and its inbound attachment, then confirms that Xray still listens on the selected localhost port.
 
 The final output block contains only ready-to-import VLESS URLs, one URL per line, with no separate labels between them.
 
@@ -182,6 +187,10 @@ Re-running the fresh installer offers diagnostics or exit only. If unrelated or 
 
 ## Final audit
 
-The installer verifies at least nginx/x-ui status, IPv6 disablement, public 80/443, localhost-only panel/Xray, absence of 2096, `/health`, Basic Auth rejection without credentials, WebSocket HTTP 101, certificate readability, Telegram connectivity, and a certbot renewal dry-run.
+The installer verifies at least nginx/x-ui status, IPv6 disablement, public 80/443, localhost-only panel/Xray, absence of 2096, `/health`, Basic Auth rejection without credentials, a real temporary VLESS/XHTTP client restricted to ALPN h3 retrieving the exact public-domain /health response through localhost Nginx, certificate readability, Telegram connectivity, and a certbot renewal dry-run.
 
 A real external client connection remains the final end-to-end acceptance test.
+
+The H3 smoke test validates TLS using the domain's certificate and cannot fall back to HTTP/2. It runs after the panel compatibility/fallback sequence and final Nginx setup. Failure stops installation without writing the completion marker; it does not trigger a panel downgrade. Temporary files/processes are cleaned up. Nginx stream-log flushing is not a success prerequisite.
+
+Local validation on 2026-10-21: 3x-ui v3.10.2 login/session, inbound/default client, helper API and bulkCreate/readback succeeded against the actual binary. The actual installer templates passed a VLESS/QUIC round trip with Xray 26.10.10 and Nginx 1.30.6, with HTTP/3.0 200 recorded by Nginx. This is not a clean VPS installation acceptance test; apt/systemd/UFW, public DNS/ACME and external UDP reachability still require that test. Historical VPS validation remains 0.1.8-dev / v3.8.5.

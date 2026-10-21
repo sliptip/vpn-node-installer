@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-VERSION="0.1.8-dev"
-WS_PATH="/client/api/v2"
-XRAY_PORT=10000
+VERSION="0.2.0-dev"
+XHTTP_PATH="/client/api/v3"
+XHTTP_MODE="stream-one"
+XRAY_PORT=10001
 BASIC_USER="admin"
 STATE_DIR="/etc/vpn-node-installer"
 STATE_FILE="$STATE_DIR/state.env"
@@ -17,6 +18,8 @@ STATIC_ROOT="/var/www/vpn-node-static"
 HTPASSWD="/etc/nginx/.htpasswd"
 XUI_UPSTREAM_REPO="MHSanaei/3x-ui"
 XUI_MIRROR_REPO="sliptip/3x-ui"
+XUI_PREFERRED="v3.10.2"
+# Last operator-validated panel release; the new H3 installer still needs a VPS acceptance test.
 XUI_KNOWN_GOOD="v3.8.5"
 XUI_FALLBACK_TAG="v3.8.0"
 XUI_FALLBACK_AMD64_SHA256="236b837627520f0c4ae4134dc6a34ea5e294b69e158879795fe8cd51c5f3582c"
@@ -25,7 +28,7 @@ XUI_RAW_BASE="https://raw.githubusercontent.com/MHSanaei/3x-ui"
 XUI_MIRROR_RAW_BASE="https://raw.githubusercontent.com/sliptip/3x-ui"
 CLIENT_HELPER_URL="https://raw.githubusercontent.com/sliptip/vpn-node-installer/main/clients.sh"
 CLIENT_HELPER_BIN="/usr/local/sbin/vpn-clients"
-XUI_SELECTED_TAG="$XUI_KNOWN_GOOD"
+XUI_SELECTED_TAG="$XUI_PREFERRED"
 XUI_ACTIVE_TAG=""
 
 log(){ printf '[%s] %s\n' "$(date -Is)" "$*" >>"$LOG"; }
@@ -168,33 +171,19 @@ version_gt(){
 }
 
 choose_xui_version(){
-  local latest="" choice=""
+  local latest="" choice="" candidate="$XUI_PREFERRED"
   latest=$(resolve_latest_xui_tag || true)
-  XUI_SELECTED_TAG="$XUI_KNOWN_GOOD"
-
-  if [[ -z "$latest" ]]; then
-    warn "Не удалось определить latest stable 3x-ui. Использую проверенную $XUI_KNOWN_GOOD."
-    return 0
+  if [[ -n "$latest" ]] && version_gt "$latest" "$candidate"; then
+    candidate="$latest"
   fi
-
-  if [[ "$latest" == "$XUI_KNOWN_GOOD" ]]; then
-    echo "3x-ui: latest stable = $latest; это текущая проверенная версия."
-    return 0
-  fi
-
-  if version_gt "$latest" "$XUI_KNOWN_GOOD"; then
-    printf '\nДоступна новая stable-версия 3x-ui: %s\n' "$latest"
-    printf 'Последняя проверенная этим установщиком: %s\n\n' "$XUI_KNOWN_GOOD"
-    echo "1) Попробовать $latest; при несовместимости автоматически вернуться на $XUI_KNOWN_GOOD"
-    echo "2) Сразу установить проверенную $XUI_KNOWN_GOOD (по умолчанию)"
-    read -r -p "Выберите [1/2]: " choice
-    if [[ "$choice" == 1 ]]; then
-      XUI_SELECTED_TAG="$latest"
-    fi
-    return 0
-  fi
-
-  warn "Upstream latest ($latest) не новее known-good $XUI_KNOWN_GOOD. Использую known-good."
+  [[ -n "$latest" ]] || warn "Latest stable недоступен; основной кандидат $XUI_PREFERRED."
+  printf '\nОсновной релиз 3x-ui: %s\n' "$candidate"
+  printf 'Ранее проверенная версия панели: %s (новая H3-установка проверяется отдельно).\n' "$XUI_KNOWN_GOOD"
+  echo "1) Установить $candidate (по умолчанию)"
+  echo "2) Установить ранее проверенную $XUI_KNOWN_GOOD"
+  read -r -p "Выберите [1/2]: " choice
+  XUI_SELECTED_TAG="$candidate"
+  [[ "$choice" != 2 ]] || XUI_SELECTED_TAG="$XUI_KNOWN_GOOD"
 }
 
 existing_guard(){
@@ -210,6 +199,14 @@ existing_guard(){
   if [[ -x "$XUI_BIN" || -f "$XUI_DB" || -e /usr/bin/x-ui || -e /etc/systemd/system/x-ui.service || -e /etc/nginx/sites-enabled/vpn-node.conf ]]; then
     die "Найдена существующая/частичная конфигурация без маркера установщика. Ничего не перезаписываю."
   fi
+  local config
+  for config in /etc/nginx/sites-enabled/* /etc/nginx/conf.d/*.conf; do
+    [[ -e "$config" || -L "$config" ]] || continue
+    case "$config" in
+      /etc/nginx/sites-enabled/default|/etc/nginx/conf.d/default.conf) ;;
+      *) die "Найдена существующая конфигурация Nginx: $config. Нужен чистый VPS." ;;
+    esac
+  done
 }
 
 diagnostics(){
@@ -218,7 +215,8 @@ diagnostics(){
   printf 'x-ui: %s\n' "$(systemctl is-active x-ui 2>/dev/null || true)"
   printf 'certbot.timer: %s\n' "$(systemctl is-active certbot.timer 2>/dev/null || true)"
   printf 'IPv6 disabled: %s\n' "$(sysctl -n net.ipv6.conf.all.disable_ipv6 2>/dev/null || echo '?')"
-  ufw status 2>/dev/null | head -n5 || true
+  ufw status 2>/dev/null || true
+  ss -lunp | grep -E ":443([[:space:]]|$)" || true
   ss -ltnp | grep -E ":($(ssh_server_port)|80|443|2096|${XRAY_PORT})([[:space:]]|$)|nginx|x-ui|xray" || true
   if [[ -n "${DOMAIN:-}" ]]; then
     curl -4fsS --max-time 10 "https://${DOMAIN}/health" || true; echo
@@ -262,35 +260,65 @@ telegram_test(){
 }
 
 install_packages(){
-  info "Устанавливаю пакеты"
+  info "Устанавливаю зависимости и Nginx stable из nginx.org с HTTP/3"
   apt-get update
-  local p=(nginx certbot apache2-utils curl wget unzip socat sqlite3 rsync ca-certificates dnsutils netcat-openbsd ufw python3)
-  if ! DEBIAN_FRONTEND=noninteractive apt-get install -y "${p[@]}"; then
-    warn "apt/dpkg споткнулся; применяю известный nginx IPv6-listen fix."
-    [[ -f /etc/nginx/sites-available/default ]] && {
-      sed -i -E 's/^([[:space:]]*)listen \[::\]:80 default_server;/\1# listen [::]:80 default_server;/' /etc/nginx/sites-available/default
-      sed -i -E 's/^([[:space:]]*)listen \[::\]:443 ssl default_server;/\1# listen [::]:443 ssl default_server;/' /etc/nginx/sites-available/default
-    }
-    dpkg --configure -a
-    DEBIAN_FRONTEND=noninteractive apt-get -f install -y
-    DEBIAN_FRONTEND=noninteractive apt-get install -y "${p[@]}"
+  DEBIAN_FRONTEND=noninteractive apt-get install -y certbot apache2-utils curl wget unzip socat sqlite3 rsync ca-certificates dnsutils netcat-openbsd ufw python3 gnupg ubuntu-keyring
+  local key
+  key=$(mktemp /root/nginx-key.XXXXXX)
+  curl -fsSL --connect-timeout 10 --max-time 60 https://nginx.org/keys/nginx_signing.key -o "$key"
+  if ! gpg --batch --show-keys --with-colons "$key" 2>/dev/null | awk -F: '$1 == "fpr" {print $10}' | grep -Fxq '573BFD6B3D8FBC641079A6ABABF5BD827BD9BF62'; then
+    rm -f "$key"
+    die "Не совпал fingerprint ключа nginx.org."
   fi
-  [[ -f /etc/nginx/sites-available/default ]] && {
-    sed -i -E 's/^([[:space:]]*)listen \[::\]:80 default_server;/\1# listen [::]:80 default_server;/' /etc/nginx/sites-available/default
-    sed -i -E 's/^([[:space:]]*)listen \[::\]:443 ssl default_server;/\1# listen [::]:443 ssl default_server;/' /etc/nginx/sites-available/default
-  }
+  gpg --batch --yes --dearmor -o /usr/share/keyrings/nginx-archive-keyring.gpg "$key"
+  rm -f "$key"
+  chmod 644 /usr/share/keyrings/nginx-archive-keyring.gpg
+  printf '%s\n' 'deb [arch=amd64 signed-by=/usr/share/keyrings/nginx-archive-keyring.gpg] https://nginx.org/packages/ubuntu noble nginx' >/etc/apt/sources.list.d/nginx.list
+  printf '%s\n' 'Package: nginx' 'Pin: origin nginx.org' 'Pin-Priority: 900' >/etc/apt/preferences.d/99nginx
+  chmod 644 /etc/apt/sources.list.d/nginx.list /etc/apt/preferences.d/99nginx
+  apt-get update
+  DEBIAN_FRONTEND=noninteractive apt-get -o Dpkg::Options::=--force-confold install -y nginx
+  nginx -V 2>&1 | grep -q -- '--with-http_v3_module' || die "Nginx без HTTP/3."
+  nginx -V 2>&1 | grep -q -- '--with-http_v2_module' || die "Nginx без HTTP/2 upstream поддержки."
+  nginx -V 2>&1 | grep -q -- '--with-http_sub_module' || die "Nginx без sub_filter для панели."
+  install -d -m755 /etc/nginx/sites-available /etc/nginx/sites-enabled /var/cache/nginx
+  local d
+  for d in client_temp proxy_temp fastcgi_temp uwsgi_temp scgi_temp; do
+    install -d -o www-data -g www-data -m700 "/var/cache/nginx/$d"
+  done
+  # Clean-host only: nginx.org does not include sites-enabled by default.
+  cp -p /etc/nginx/nginx.conf /etc/nginx/nginx.conf.before-vpn-installer
+  cat >/etc/nginx/nginx.conf <<'NGINX_MAIN'
+user www-data;
+worker_processes auto;
+pid /run/nginx.pid;
+error_log /var/log/nginx/error.log warn;
+events { worker_connections 1024; }
+http {
+  include /etc/nginx/mime.types;
+  default_type application/octet-stream;
+  sendfile on;
+  keepalive_timeout 65;
+  log_format vpn_transport '$server_protocol $status';
+  include /etc/nginx/conf.d/*.conf;
+  include /etc/nginx/sites-enabled/*;
+}
+NGINX_MAIN
+  chmod 644 /etc/nginx/nginx.conf
+  rm -f /etc/nginx/conf.d/default.conf /etc/nginx/sites-enabled/default
   nginx -t
 }
 
 configure_ufw(){
   local ssh_port="$1"
-  info "Настраиваю UFW: SSH=${ssh_port}/tcp, 80/tcp, 443/tcp"
+  info "Настраиваю UFW: SSH=${ssh_port}/tcp, 80/tcp, 443/tcp, 443/udp (QUIC)"
   sed -i 's/^IPV6=.*/IPV6=no/' /etc/default/ufw
   ufw default deny incoming
   ufw default allow outgoing
   ufw allow "${ssh_port}/tcp"
   ufw allow 80/tcp
   ufw allow 443/tcp
+  ufw allow 443/udp
   ufw --force enable
 }
 
@@ -572,20 +600,22 @@ api_token(){
 
 create_inbound(){
   local port="$1" path="$2" token="$3" name="$4" uuid="$5" client="$6" api payload resp code ok
-  info "Создаю VLESS WS inbound и клиента $client с UUID v4"
+  info "Создаю VLESS XHTTP/H3 inbound и клиента $client с UUID v4"
   api="http://127.0.0.1:${port}${path}panel/api"
   code=$(curl -sS -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $token" "$api/server/status" || true)
   [[ "$code" == 200 ]] || return 1
   payload=$(mktemp /root/vpn-node-inbound.XXXXXX.json) || return 1
   resp=$(mktemp /root/vpn-node-response.XXXXXX.json) || { rm -f "$payload"; return 1; }
   chmod 600 "$payload" "$resp"
-  python3 - "$payload" "$name" "$uuid" "$client" <<'PY'
+  python3 - "$payload" "$name" "$uuid" "$client" "$XRAY_PORT" "$XHTTP_PATH" "$XHTTP_MODE" <<'PY'
 import json,sys
-p,name,uid,client=sys.argv[1:]
+p,name,uid,client,port,xpath,mode=sys.argv[1:]
+port=int(port)
 settings={"clients":[{"id":uid,"email":client,"flow":"","limitIp":0,"totalGB":0,"expiryTime":0,"enable":True,"tgId":0,"subId":"","comment":"","reset":0}],"decryption":"none","encryption":"none","fallbacks":[]}
-stream={"network":"ws","security":"none","wsSettings":{"acceptProxyProtocol":False,"path":"/client/api/v2","host":"","headers":{},"heartbeatPeriod":0},"sockopt":{"trustedXForwardedFor":["X-Real-IP"]}}
-obj={"up":0,"down":0,"total":0,"remark":name,"enable":True,"expiryTime":0,"trafficReset":"never","trafficResetDay":1,"lastTrafficResetTime":0,"listen":"127.0.0.1","port":10000,"protocol":"vless","settings":json.dumps(settings,separators=(',',':')),"streamSettings":json.dumps(stream,separators=(',',':')),"sniffing":json.dumps({"enabled":False}),"tag":"in-10000-tcp","shareAddrStrategy":"node","shareAddr":"","subSortIndex":1,"disableFlow":False}
-json.dump(obj,open(p,'w'),separators=(',',':'))
+stream={"network":"xhttp","security":"none","xhttpSettings":{"path":xpath,"mode":mode,"host":"","xPaddingBytes":"100-1000"},"sockopt":{"trustedXForwardedFor":["X-Real-IP"]}}
+obj={"up":0,"down":0,"total":0,"remark":name,"enable":True,"expiryTime":0,"trafficReset":"never","trafficResetDay":1,"lastTrafficResetTime":0,"listen":"127.0.0.1","port":port,"protocol":"vless","settings":json.dumps(settings,separators=(',',':')),"streamSettings":json.dumps(stream,separators=(',',':')),"sniffing":json.dumps({"enabled":False}),"tag":f"in-{port}-tcp","shareAddrStrategy":"node","shareAddr":"","subSortIndex":1,"disableFlow":False}
+with open(p,'w') as handle:
+    json.dump(obj,handle,separators=(',',':'))
 PY
   code=$(curl -sS -o "$resp" -w '%{http_code}' -X POST -H "Authorization: Bearer $token" -H 'Content-Type: application/json' --data-binary "@$payload" "$api/inbounds/add" || true)
   rm -f "$payload"
@@ -601,12 +631,15 @@ PY
   sleep 2
   ss -ltnH | awk '{print $4}' | grep -Eq "127\.0\.0\.1:${XRAY_PORT}$" || { systemctl restart x-ui; sleep 3; }
   ss -ltnH | awk '{print $4}' | grep -Eq "127\.0\.0\.1:${XRAY_PORT}$" || return 1
-  python3 - "$XUI_DB" "$uuid" "$client" <<'PY'
+  python3 - "$XUI_DB" "$uuid" "$client" "$XRAY_PORT" "$XHTTP_PATH" <<'PY'
 import json,sqlite3,sys
-r=sqlite3.connect(sys.argv[1]).execute("SELECT settings FROM inbounds WHERE port=10000 AND protocol='vless' LIMIT 1").fetchone()
-if not r: raise SystemExit(1)
-c=json.loads(r[0]).get('clients') or []
-raise SystemExit(0 if any(x.get('id')==sys.argv[2] and x.get('email')==sys.argv[3] for x in c) else 1)
+conn=sqlite3.connect("file:"+sys.argv[1]+"?mode=ro", uri=True)
+r=conn.execute("SELECT stream_settings,listen FROM inbounds WHERE port=? AND protocol='vless'", (int(sys.argv[4]),)).fetchall()
+conn.close()
+if len(r)!=1: raise SystemExit(1)
+stream=json.loads(r[0][0])
+x=stream.get('xhttpSettings') or {}
+raise SystemExit(0 if r[0][1]=='127.0.0.1' and stream.get('network')=='xhttp' and stream.get('security')=='none' and x.get('path')==sys.argv[5] and x.get('mode')=='stream-one' else 1)
 PY
 }
 
@@ -754,6 +787,7 @@ cleanup_xui_fresh_attempt(){
   systemctl stop x-ui >/dev/null 2>&1 || true
   systemctl disable x-ui >/dev/null 2>&1 || true
   rm -f /etc/systemd/system/x-ui.service
+  rm -rf /etc/systemd/system/x-ui.service.d
   rm -f /etc/systemd/system/multi-user.target.wants/x-ui.service
   rm -f /usr/bin/x-ui
   rm -f /etc/default/x-ui
@@ -844,7 +878,12 @@ server {
   location / { return 301 https://\$host\$request_uri; }
 }
 server {
-  listen 443 ssl http2;
+  listen 443 ssl;
+  listen 443 quic reuseport;
+  http2 on;
+  http3 on;
+  quic_retry on;
+  add_header Alt-Svc 'h3=":443"; ma=86400' always;
   server_name $d;
   server_tokens off;
   ssl_certificate /etc/letsencrypt/live/$d/fullchain.pem;
@@ -854,16 +893,17 @@ server {
   location = / { root $WEB_ROOT; try_files /index.html =404; }
   location = /favicon.svg { alias $STATIC_ROOT/favicon.svg; default_type image/svg+xml; }
   location = /favicon.ico { alias $STATIC_ROOT/favicon.svg; default_type image/svg+xml; }
-  location ^~ $WS_PATH {
-    proxy_pass http://127.0.0.1:$XRAY_PORT;
-    proxy_http_version 1.1;
-    proxy_set_header Upgrade \$http_upgrade;
-    proxy_set_header Connection "upgrade";
-    proxy_set_header Host \$host;
-    proxy_set_header X-Real-IP \$remote_addr;
-    proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-    proxy_set_header X-Forwarded-Proto \$scheme;
-    proxy_read_timeout 300s; proxy_send_timeout 300s; proxy_buffering off;
+  location ^~ $XHTTP_PATH {
+    client_max_body_size 0;
+    client_body_timeout 5m;
+    grpc_read_timeout 315s;
+    grpc_send_timeout 5m;
+    grpc_set_header Host \$host;
+    grpc_set_header X-Real-IP \$remote_addr;
+    grpc_set_header X-Forwarded-For \$remote_addr;
+    grpc_pass grpc://127.0.0.1:$XRAY_PORT;
+    # Only protocol/status: never log UUID-bearing paths or padding queries.
+    access_log /var/log/nginx/vpn-transport.log vpn_transport;
   }
   location = $no { return 301 $panel; }
   location ^~ $panel {
@@ -891,8 +931,74 @@ EOF_NGINX
   nginx -t; systemctl reload nginx
 }
 
+h3_smoke_test(){
+  local domain="$1" uuid="$2"
+  info "Проверяю VLESS → XHTTP/H3 → Nginx → Xray реальным локальным клиентом"
+  # UUID is passed through the environment and a private temporary file, never printed.
+  H3_TEST_UUID="$uuid" python3 - "$domain" "$XHTTP_PATH" "$XHTTP_MODE" <<'PY'
+import json, os, pathlib, socket, subprocess, sys, tempfile, time
+
+domain, path, mode = sys.argv[1:]
+uid = os.environ.pop('H3_TEST_UUID')
+binary = '/usr/local/x-ui/bin/xray-linux-amd64'
+with socket.socket() as sock:
+    sock.bind(('127.0.0.1', 0))
+    port = sock.getsockname()[1]
+config = {
+    'log': {'loglevel': 'none'},
+    'inbounds': [{'listen': '127.0.0.1', 'port': port, 'protocol': 'socks',
+                  'settings': {'auth': 'noauth', 'udp': False}}],
+    'outbounds': [{'protocol': 'vless', 'settings': {'vnext': [
+        {'address': '127.0.0.1', 'port': 443, 'users': [{'id': uid, 'encryption': 'none'}]}]},
+        'streamSettings': {'network': 'xhttp', 'security': 'tls',
+            'tlsSettings': {'serverName': domain, 'alpn': ['h3'], 'allowInsecure': False},
+            'xhttpSettings': {'host': domain, 'path': path, 'mode': mode, 'xPaddingBytes': '100-1000'}}}]
+}
+try:
+    with tempfile.TemporaryDirectory(prefix='vpn-h3-test-') as tmp:
+        config_path = pathlib.Path(tmp) / 'client.json'
+        config_path.write_text(json.dumps(config))
+        config_path.chmod(0o600)
+        check = subprocess.run([binary, 'run', '-test', '-c', str(config_path)],
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=15)
+        if check.returncode:
+            raise RuntimeError('Xray не принял конфигурацию H3-клиента')
+        proc = subprocess.Popen([binary, 'run', '-c', str(config_path)],
+                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        ok = False
+        try:
+            for _ in range(5):
+                time.sleep(1)
+                if proc.poll() is not None:
+                    break
+                result = subprocess.run(['curl', '--silent', '--show-error', '--fail',
+                    '--noproxy', '', '--proxy', f'socks5h://127.0.0.1:{port}',
+                    '--connect-timeout', '5', '--max-time', '12', f'https://{domain}/health'],
+                    capture_output=True, timeout=15)
+                if result.returncode == 0 and result.stdout.strip() == b'{"status":"ok"}':
+                    ok = True
+                    break
+        finally:
+            proc.terminate()
+            try:
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait()
+        if not ok:
+            raise RuntimeError('не получен /health через VLESS/XHTTP/H3')
+        # ALPN is strictly ['h3']; this client cannot silently fall back to H2/TCP.
+        print('Локальный VLESS/XHTTP/H3 тест: OK; внешний UDP/443 проверяется клиентом с другого устройства.')
+except (OSError, subprocess.SubprocessError, RuntimeError) as exc:
+    # Only our fixed stage messages; no subprocess output, URL credentials or config.
+    message = str(exc) if isinstance(exc, RuntimeError) else 'не удалось выполнить H3-тест'
+    print('[ERROR] ' + message, file=sys.stderr)
+    raise SystemExit(1)
+PY
+}
+
 final_checks(){
-  local d="$1" port="$2" panel="$3" code h
+  local d="$1" port="$2" panel="$3" uuid="$4" code h
   info "Финальные проверки"
   [[ "$(systemctl is-active nginx)" == active ]] || die "nginx не active."
   [[ "$(systemctl is-active x-ui)" == active ]] || die "x-ui не active."
@@ -906,10 +1012,12 @@ final_checks(){
   ss -ltnH | awk '{print $4}' | grep -Eq '(^|:)2096$' && die "2096 слушает." || true
   h=$(curl -4fsS --max-time 15 "https://$d/health"); [[ "$h" == '{"status":"ok"}' ]] || die "/health неверный."
   code=$(curl -4ksS -o /dev/null -w '%{http_code}' --max-time 15 "https://$d$panel" || true); [[ "$code" == 401 ]] || die "Panel without Basic Auth: HTTP $code, expected 401."
-  code=$(curl -4ksS --http1.1 --connect-timeout 10 --max-time 2 -o /dev/null -w '%{http_code}' -H 'Connection: Upgrade' -H 'Upgrade: websocket' -H 'Sec-WebSocket-Version: 13' -H 'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==' "https://$d$WS_PATH" 2>/dev/null || true); [[ "$code" == 101 ]] || die "WS handshake: HTTP $code, expected 101."
+  ss -lunH | awk '{print $4}' | grep -Eq '0\.0\.0\.0:443$' || die "Нет UDP/443 QUIC listener."
+  h3_smoke_test "$d" "$uuid" || die "Не пройден реальный локальный VLESS/XHTTP/H3 тест."
+
   openssl x509 -in "/etc/letsencrypt/live/$d/fullchain.pem" -noout -subject -issuer -dates
   telegram_test
-  certbot renew --dry-run
+  certbot renew --dry-run --no-random-sleep-on-renew
 }
 
 write_state(){
@@ -924,13 +1032,18 @@ write_state(){
     printf 'INBOUND=%q\n' "$name"
     printf 'CLIENT=%q\n' "$client"
     printf 'XUI_VERSION=%q\n' "$xui_version"
+    printf 'TRANSPORT=%q\n' xhttp
+    printf 'XRAY_PORT=%q\n' "$XRAY_PORT"
+    printf 'TRANSPORT_PATH=%q\n' "$XHTTP_PATH"
+    printf 'XHTTP_MODE=%q\n' "$XHTTP_MODE"
+    printf 'CLIENT_ALPN=%q\n' h3
   } >"$STATE_FILE"
   chmod 600 "$STATE_FILE"; echo "$VERSION" >"$MARKER"; chmod 600 "$MARKER"
 }
 
 summary(){
   local d="$1" ip="$2" panel="$3" name="$4" uuid="$5" client="$6" xui_version="$7"
-  local link="vless://${uuid}@${d}:443?type=ws&encryption=none&security=tls&sni=${d}&host=${d}&path=%2Fclient%2Fapi%2Fv2&alpn=http%2F1.1#${client}"
+  local link="vless://${uuid}@${d}:443?type=xhttp&encryption=none&security=tls&sni=${d}&host=${d}&path=%2Fclient%2Fapi%2Fv3&mode=stream-one&alpn=h3&x_padding_bytes=100-1000#${client}"
   cat <<EOF_SUMMARY
 
 ======================================================================
@@ -942,7 +1055,8 @@ Basic Auth : $BASIC_USER / (ваш пароль)
 3x-ui      : $xui_version
 Inbound    : $name
 Клиент     : $client
-WS path    : $WS_PATH
+Transport  : XHTTP / HTTP3 (QUIC), stream-one
+XHTTP path : $XHTTP_PATH
 Xray local : 127.0.0.1:$XRAY_PORT
 IPv6       : отключён
 
@@ -1039,7 +1153,7 @@ main(){
   basic_auth "$bpass"
   unset bpass xpass
   write_final_nginx "$domain" "$panel_port" "$panel_path"
-  final_checks "$domain" "$panel_port" "$panel_path"
+  final_checks "$domain" "$panel_port" "$panel_path" "$uuid"
   write_state "$domain" "$ip" "$panel_port" "$panel_path" "$key" "$client_name" "$xui_version"
   log "Installation completed domain=$domain ip=$ip version=$VERSION xui=$xui_version"
   summary "$domain" "$ip" "$panel_path" "$key" "$uuid" "$client_name" "$xui_version"

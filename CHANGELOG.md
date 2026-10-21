@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.2.0-dev — 2026-10-21
+
+Fresh installs move to VLESS/XHTTP stream-one over HTTP/3; preferred 3x-ui is v3.10.2.
+
+- Continue discovering latest stable and offer it when newer than the preferred tag. Enter selects preferred/latest; v3.8.5 remains selectable and retains its historical VPS validation status. Keep v3.8.0 emergency upstream/mirror fallback without archiving another release.
+- Install official nginx.org stable packages with signing-key fingerprint verification and HTTP/3/module checks. Configure www-data, sites-enabled and private temp directories; refuse custom vhosts on fresh installs.
+- Open UDP/443 alongside HTTPS; terminate QUIC/TLS at Nginx and forward XHTTP over h2c to 127.0.0.1:10001, path /client/api/v3. No new WS VPN inbound.
+- Generate H3-only stream-one client links, persist transport settings, and validate inbound settings. Updated helper keeps legacy WS defaults for old node state and refuses mismatches before client creation.
+- Add a real temporary Xray H3 client to final checks. Verify a VLESS round trip and the exact /health response; do not treat delayed access-log flushing as a transport failure. Keep external-client acceptance separate.
+- Remove new upstream systemd drop-ins when cleaning only a failed fresh-install attempt. Skip Certbot's random sleep during the final renewal dry-run.
+- Add offline transport/state/link tests and an optional real-binary QUIC integration test; retain credential, DNS and fallback regressions.
+- Local validation: actual 3x-ui v3.10.2 login/session, XHTTP inbound/default client, helper endpoints and bulkCreate/readback succeeded. Actual Xray 26.10.10 and Nginx 1.30.6 passed a VLESS round trip using installer templates, with HTTP/3.0 200 in Nginx.
+- Full clean-VPS installation and external H3 client acceptance for 0.2.0-dev remain pending. Existing servers are not migrated by this change.
+
 ## 0.1.8-dev — 2026-09-16
 
 DNS timeout handling and separate validated/emergency 3x-ui versions.

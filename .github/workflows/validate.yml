@@ -4,11 +4,13 @@ on:
   push:
     paths:
       - install.sh
+      - clients.sh
       - 'tests/**'
       - .github/workflows/validate.yml
   pull_request:
     paths:
       - install.sh
+      - clients.sh
       - 'tests/**'
       - .github/workflows/validate.yml
 
@@ -36,10 +38,10 @@ jobs:
 
       - name: Required invariants
         run: |
-          grep -Fq 'VERSION="0.1.8-dev"' install.sh
+          grep -Fq 'VERSION="0.2.0-dev"' install.sh
           grep -Fq 'local VERSION=""' install.sh
-          grep -Fq 'WS_PATH="/client/api/v2"' install.sh
-          grep -Fq 'XRAY_PORT=10000' install.sh
+          grep -Fq 'XHTTP_PATH="/client/api/v3"' install.sh
+          grep -Fq 'XRAY_PORT=10001' install.sh
           grep -Fq 'BASIC_USER="admin"' install.sh
           grep -Fq 'client_name="default@$domain"' install.sh
           grep -Fq 'trustedXForwardedFor' install.sh
@@ -49,6 +51,8 @@ jobs:
           grep -Fq 'ssh_server_port' install.sh
           grep -Fq 'CLIENT_HELPER_BIN="/usr/local/sbin/vpn-clients"' install.sh
           grep -Fq 'offer_add_clients' install.sh
+          grep -Fq 'XUI_PREFERRED="v3.10.2"' install.sh
+          grep -Fq 'h3_smoke_test' install.sh
           grep -Fq 'XUI_KNOWN_GOOD="v3.8.5"' install.sh
           grep -Fq 'XUI_FALLBACK_TAG="v3.8.0"' install.sh
           grep -Fq 'XUI_MIRROR_REPO="sliptip/3x-ui"' install.sh
@@ -64,3 +68,25 @@ jobs:
           grep -Fq 'cleanup_xui_fresh_attempt' install.sh
           grep -Fq 'install_xui_with_fallback' install.sh
           grep -Fq "printf 'XUI_VERSION=%q" install.sh
+
+  h3-integration:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Fetch checksum-pinned test binaries
+        run: |
+          mkdir -p "$RUNNER_TEMP/vpn-h3-binaries"
+          cd "$RUNNER_TEMP/vpn-h3-binaries"
+          curl -fSL --retry 2 --connect-timeout 10 --max-time 180 \
+            https://github.com/MHSanaei/3x-ui/releases/download/v3.10.2/x-ui-linux-amd64.tar.gz -o x-ui.tar.gz
+          echo 'bfda7921984e7a72555c38d4e861c7a8b67b3686b658608937de99682f1452d0  x-ui.tar.gz' | sha256sum -c -
+          tar --no-same-owner -xzf x-ui.tar.gz
+          curl -fSL --retry 2 --connect-timeout 10 --max-time 180 \
+            https://nginx.org/packages/ubuntu/pool/nginx/n/nginx/nginx_1.30.6-1~noble_amd64.deb -o nginx.deb
+          echo '86f0f503139203e8d75f1832b309ec084b0de5dfb6b72e11d0327790d3ffb90b  nginx.deb' | sha256sum -c -
+          dpkg-deb -x nginx.deb nginx
+      - name: Real VLESS XHTTP H3 round trip
+        run: |
+          export XRAY_BINARY="$RUNNER_TEMP/vpn-h3-binaries/x-ui/bin/xray-linux-amd64"
+          export NGINX_BINARY="$RUNNER_TEMP/vpn-h3-binaries/nginx/usr/sbin/nginx"
+          python3 -m unittest discover -s tests -p test_transport.py -v

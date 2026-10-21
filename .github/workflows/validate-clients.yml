@@ -30,7 +30,7 @@ jobs:
         run: bash clients.sh --self-test
       - name: Input and confirmation invariants
         run: |
-          grep -Fq 'VERSION="0.1.6-dev"' clients.sh
+          grep -Fq 'VERSION="0.2.0-dev"' clients.sh
           grep -Fq 'INPUT_IDLE_TIMEOUT="1.5"' clients.sh
           grep -Fq 'collect_input(){' clients.sh
           grep -Fq 'read -r -N 1 -t "$timeout" ch' clients.sh

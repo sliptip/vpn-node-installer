@@ -102,9 +102,10 @@ class DNSTests(unittest.TestCase):
 class VersionTests(unittest.TestCase):
     def test_selection(self):
         for latest, choice, selected in [
-            ('v3.8.5', '', 'v3.8.5'), ('', '', 'v3.8.5'),
-            ('v3.8.0', '', 'v3.8.5'), ('v3.9.0', '1', 'v3.9.0'),
-            ('v3.9.0', '', 'v3.8.5'), ('v3.9.0', '2', 'v3.8.5'),
+            ('v3.10.2', '', 'v3.10.2'), ('', '', 'v3.10.2'),
+            ('v3.8.0', '', 'v3.10.2'), ('v3.11.0', '1', 'v3.11.0'),
+            ('v3.11.0', '', 'v3.11.0'), ('v3.11.0', '2', 'v3.8.5'),
+            ('v3.10.2', '2', 'v3.8.5'),
         ]:
             with self.subTest(latest=latest, choice=choice):
                 r = bash('''
