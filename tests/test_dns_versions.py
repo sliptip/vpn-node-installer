@@ -102,10 +102,9 @@ class DNSTests(unittest.TestCase):
 class VersionTests(unittest.TestCase):
     def test_selection(self):
         for latest, choice, selected in [
-            ('v3.10.2', '', 'v3.10.2'), ('', '', 'v3.10.2'),
-            ('v3.8.0', '', 'v3.10.2'), ('v3.11.0', '1', 'v3.11.0'),
-            ('v3.11.0', '', 'v3.11.0'), ('v3.11.0', '2', 'v3.8.5'),
-            ('v3.10.2', '2', 'v3.8.5'),
+            ('v3.11.0', '', 'v3.11.0'), ('', '', 'v3.11.0'),
+            ('v3.10.2', '', 'v3.11.0'), ('v3.12.0', '1', 'v3.12.0'),
+            ('v3.12.0', '', 'v3.12.0'), ('v3.12.0', '2', 'v3.11.0'),
         ]:
             with self.subTest(latest=latest, choice=choice):
                 r = bash('''
@@ -116,14 +115,26 @@ class VersionTests(unittest.TestCase):
                 ''', env=dict(os.environ, LATEST=latest, CHOICE=choice))
                 self.assertEqual(r.returncode, 0, r.stderr)
                 self.assertIn('SELECTED=' + selected, r.stdout)
+                self.assertEqual('2) Установить' in r.stdout, latest == 'v3.12.0')
+
+    def test_current_validated_version_does_not_read_input(self):
+        r = bash('''
+          warn(){ :; }
+          resolve_latest_xui_tag(){ echo v3.11.0; }
+          read(){ echo UNEXPECTED_READ >&2; return 1; }
+          choose_xui_version
+          [[ "$XUI_SELECTED_TAG" == v3.11.0 ]]
+        ''')
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertNotIn('UNEXPECTED_READ', r.stderr)
 
     def test_fallback_order(self):
         cases = [
-            ('v3.9.0', 'v3.9.0:upstream', ['v3.9.0:upstream']),
-            ('v3.9.0', 'v3.8.5:upstream', ['v3.9.0:upstream', 'cleanup', 'v3.8.5:upstream']),
-            ('v3.8.5', 'v3.8.0:upstream', ['v3.8.5:upstream', 'cleanup', 'v3.8.0:upstream']),
-            ('v3.9.0', 'v3.8.0:mirror', ['v3.9.0:upstream', 'cleanup', 'v3.8.5:upstream', 'cleanup', 'v3.8.0:upstream', 'cleanup', 'v3.8.0:mirror']),
-            ('v3.8.5', 'none', ['v3.8.5:upstream', 'cleanup', 'v3.8.0:upstream', 'cleanup', 'v3.8.0:mirror']),
+            ('v3.12.0', 'v3.12.0:upstream', ['v3.12.0:upstream']),
+            ('v3.12.0', 'v3.11.0:upstream', ['v3.12.0:upstream', 'cleanup', 'v3.11.0:upstream']),
+            ('v3.11.0', 'v3.8.0:upstream', ['v3.11.0:upstream', 'cleanup', 'v3.8.0:upstream']),
+            ('v3.12.0', 'v3.8.0:mirror', ['v3.12.0:upstream', 'cleanup', 'v3.11.0:upstream', 'cleanup', 'v3.8.0:upstream', 'cleanup', 'v3.8.0:mirror']),
+            ('v3.11.0', 'none', ['v3.11.0:upstream', 'cleanup', 'v3.8.0:upstream', 'cleanup', 'v3.8.0:mirror']),
         ]
         for selected, success, expected in cases:
             with self.subTest(selected=selected, success=success):

@@ -18,9 +18,9 @@
 - internal Xray TLS/security: `none`
 - Basic Auth username: `admin`
 - database: SQLite
-- preferred stable 3x-ui tag: `v3.10.2` (bundled Xray `26.10.10`)
-- latest operator-confirmed VPS validation: `v3.10.2` with installer `0.2.0-dev`, 2026-10-21
-- retained historical rollback selection (`XUI_KNOWN_GOOD`): `v3.8.5`
+- preferred stable 3x-ui tag: `v3.11.0` (bundled Xray `26.10.21`)
+- latest operator-confirmed successful VPS installation: `v3.11.0` with installer `0.2.0-dev`, 2026-10-30
+- latest validated release (`XUI_KNOWN_GOOD`): `v3.11.0` as of installer `0.2.1-dev`
 - pinned automatic fallback / emergency mirror tag: `v3.8.0`
 
 ## Derived values
@@ -36,7 +36,7 @@ The domain-key derivation intentionally means “label immediately before the TL
 
 ## Interactive input
 
-The fresh installer asks for the node FQDN and the panel / Basic Auth credentials. It offers the preferred/latest stable 3x-ui release or the previously VPS-validated panel version. Enter selects preferred/latest. After a successful install it offers to run the bulk client helper. Declining the bulk helper leaves the completed node usable.
+The fresh installer asks for the node FQDN and the panel / Basic Auth credentials. When latest is newer than the validated release, it offers latest or the validated release; Enter selects latest. When the candidate equals the validated release, it selects that version without reading a duplicate-choice prompt. After a successful install it offers to run the bulk client helper. Declining the bulk helper leaves the completed node usable.
 
 Panel username input is restricted to 1–64 ASCII characters: the first character is alphanumeric; subsequent characters may also be `.`, `_`, `@`, `+`, or `-`. Invalid bytes, Cyrillic, whitespace and control characters trigger a new prompt without normalization or silent repair. Case is preserved.
 
@@ -57,7 +57,7 @@ Official upstream repository: `https://github.com/MHSanaei/3x-ui`.
 
 Pinned fallback emergency mirror: `https://github.com/sliptip/3x-ui`. The mirror preserves tag `v3.8.0` and the Linux amd64 release asset. The archived amd64 SHA-256 is `236b837627520f0c4ae4134dc6a34ea5e294b69e158879795fe8cd51c5f3582c`.
 
-The latest operator-confirmed VPS validation is **`0.2.0-dev` / 3x-ui `v3.10.2` / VLESS XHTTP H3**, confirmed on **2026-10-21** after successful installation and external client use. The historical `XUI_KNOWN_GOOD=v3.8.5` selection remains available for rollback; this status update does not change release-selection behavior.
+The latest operator-confirmed successful installation is **`0.2.0-dev` / 3x-ui `v3.11.0`**, confirmed on **2026-10-30** on a new VPS. Installer **`0.2.1-dev`** promotes both `XUI_PREFERRED` and `XUI_KNOWN_GOOD` to `v3.11.0`. The earlier `0.2.0-dev` / `v3.10.2` VPS deployment and external VLESS/XHTTP/H3 client acceptance remain recorded as successful on 2026-10-21.
 
 Previously, on 2026-09-16, installer **`0.1.7-dev`** with client helper **`0.1.6-dev`** completed a clean Ubuntu 24.04 LTS x64 deployment: credential/session verification, browser panel login, client creation, final installer checks, certificate renewal dry-run and real external VPN use were confirmed.
 
@@ -68,9 +68,9 @@ As of installer `0.1.8-dev`, version roles are separate: `XUI_KNOWN_GOOD=v3.8.5`
 Fresh-install version selection:
 
 1. Resolve latest stable from official upstream; prerelease/dev tags are excluded.
-2. Use `v3.10.2` as the preferred floor; if upstream latest is newer, use latest as the main candidate.
+2. Use `v3.11.0` as the preferred floor; if upstream latest is newer, use latest as the main candidate.
 3. If latest cannot be resolved, retain the preferred candidate and explain the fallback.
-4. Offer the main candidate or `v3.8.5`; Enter selects the main candidate. The retained historical rollback choice is separate from the current v3.10.2 H3 validation.
+4. If the candidate equals validated `v3.11.0`, select it without a menu or input read. If a newer stable exists, offer latest or validated `v3.11.0`; Enter selects latest.
 5. Every attempt uses the exact release-tag installer and passes that same tag.
 6. After failure, clean only the unsuccessful fresh-install attempt and try the next source/version: selected upstream → validated upstream (unless already tried) → emergency `v3.8.0` upstream → emergency `v3.8.0` mirror. Stop at the first successful compatibility gate.
 7. The mirror is allowed only for `XUI_FALLBACK_TAG`; its repository/release URLs are rewritten to `sliptip/3x-ui` and its checksum is checked against `XUI_FALLBACK_AMD64_SHA256`.
@@ -197,3 +197,5 @@ A real external client connection remains the final end-to-end acceptance test.
 The H3 smoke test validates TLS using the domain's certificate and cannot fall back to HTTP/2. It runs after the panel compatibility/fallback sequence and final Nginx setup. Failure stops installation without writing the completion marker; it does not trigger a panel downgrade. Temporary files/processes are cleaned up. Nginx stream-log flushing is not a success prerequisite.
 
 Local validation on 2026-10-21: 3x-ui v3.10.2 login/session, inbound/default client, helper API and bulkCreate/readback succeeded against the actual binary. The actual installer templates passed a VLESS/QUIC round trip with Xray 26.10.10 and Nginx 1.30.6, with HTTP/3.0 200 recorded by Nginx. These local checks are recorded separately from VPS acceptance. Later on 2026-10-21, the operator confirmed successful installation and external VLESS/XHTTP/H3 client use for 0.2.0-dev / v3.10.2. VPS acceptance is complete based on that operator confirmation; no raw VPS transcript or separate live-server inspection is claimed in this status update. Historical validation of 0.1.8-dev / v3.8.5 remains recorded above.
+
+On 2026-10-30 the operator confirmed that the new-server installation of v3.11.0 completed successfully. This confirmation promotes the validated version in the installer. CI transport integration now uses the checksum-pinned v3.11.0 archive and its bundled Xray 26.10.21.

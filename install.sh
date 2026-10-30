@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-VERSION="0.2.0-dev"
+VERSION="0.2.1-dev"
 XHTTP_PATH="/client/api/v3"
 XHTTP_MODE="stream-one"
 XRAY_PORT=10001
@@ -18,9 +18,9 @@ STATIC_ROOT="/var/www/vpn-node-static"
 HTPASSWD="/etc/nginx/.htpasswd"
 XUI_UPSTREAM_REPO="MHSanaei/3x-ui"
 XUI_MIRROR_REPO="sliptip/3x-ui"
-XUI_PREFERRED="v3.10.2"
-# Retained WS-era rollback choice. Operator validated 0.2.0-dev / v3.10.2 / H3 on 2026-10-21.
-XUI_KNOWN_GOOD="v3.8.5"
+XUI_PREFERRED="v3.11.0"
+# Operator confirmed successful installation of v3.11.0 on 2026-10-30.
+XUI_KNOWN_GOOD="v3.11.0"
 XUI_FALLBACK_TAG="v3.8.0"
 XUI_FALLBACK_AMD64_SHA256="236b837627520f0c4ae4134dc6a34ea5e294b69e158879795fe8cd51c5f3582c"
 XUI_RELEASES_LATEST="https://github.com/MHSanaei/3x-ui/releases/latest"
@@ -177,12 +177,16 @@ choose_xui_version(){
     candidate="$latest"
   fi
   [[ -n "$latest" ]] || warn "Latest stable недоступен; основной кандидат $XUI_PREFERRED."
-  printf '\nОсновной релиз 3x-ui: %s\n' "$candidate"
-  printf 'Ранее проверенная резервная версия панели: %s.\n' "$XUI_KNOWN_GOOD"
-  echo "1) Установить $candidate (по умолчанию)"
-  echo "2) Установить ранее проверенную $XUI_KNOWN_GOOD"
-  read -r -p "Выберите [1/2]: " choice
   XUI_SELECTED_TAG="$candidate"
+  if [[ "$candidate" == "$XUI_KNOWN_GOOD" ]]; then
+    printf '\n3x-ui %s — последняя проверенная версия; устанавливаю её.\n' "$candidate"
+    return 0
+  fi
+  printf '\nОсновной релиз 3x-ui: %s\n' "$candidate"
+  printf 'Последняя проверенная версия панели: %s.\n' "$XUI_KNOWN_GOOD"
+  echo "1) Установить $candidate (по умолчанию)"
+  echo "2) Установить проверенную $XUI_KNOWN_GOOD"
+  read -r -p "Выберите [1/2]: " choice
   [[ "$choice" != 2 ]] || XUI_SELECTED_TAG="$XUI_KNOWN_GOOD"
 }
 

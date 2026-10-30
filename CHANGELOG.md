@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.2.1-dev — 2026-10-30
+
+Promote the successfully installed 3x-ui v3.11.0 to the preferred and validated release.
+
+- The operator confirmed successful installation of v3.11.0 with 0.2.0-dev on a new VPS. Historical v3.10.2 and v3.8.5 validation records are preserved.
+- Set both `XUI_PREFERRED` and `XUI_KNOWN_GOOD` to v3.11.0; discovery still offers a newer stable release with validated v3.11.0 as the alternative.
+- Select the current validated candidate without duplicate menu choices or reading input when preferred/latest equals known-good.
+- Fresh-install fallback becomes selected upstream → v3.11.0 upstream when not already tried → emergency v3.8.0 upstream → emergency v3.8.0 mirror. No new release archive is created.
+- Update version-selection/fallback regression tests and CI invariants. The real H3 integration job now uses the SHA-256-pinned v3.11.0 archive (Xray 26.10.21).
+- Installer is 0.2.1-dev; client helper remains 0.2.0-dev. No transport or existing-server migration changes.
+
 ## 0.2.0-dev — 2026-10-21
 
 Fresh installs move to VLESS/XHTTP stream-one over HTTP/3; preferred 3x-ui is v3.10.2.
