@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.1-dev — security correction 2026-11-13
+
+- Remove the unauthenticated `/version` location from newly generated Nginx sites. Previous builds returned `service: vpn-node`, `installer: vpn-node-installer`, and the installer version without authentication.
+- Keep the neutral `/health` endpoint needed for installation and transport checks; no change to Xray, HTTP/3 or Basic Auth.
+- Add idempotent migration helper `tools/remove-public-version.sh` for already deployed nodes, with timestamped backup, syntax check, rollback on failure, and Nginx reload only.
+- Add a regression test and CI invariant against reintroducing the endpoint.
+
 ## 0.2.1-dev — 2026-10-30
 
 Promote the successfully installed 3x-ui v3.11.0 to the preferred and validated release.
