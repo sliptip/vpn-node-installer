@@ -101,11 +101,18 @@ def request(domain, path, folder):
 
 
 def ports():
+    """Report TCP listeners and UDP sockets separately; UDP ephemeral != open service."""
     output = run(["ss", "-H", "-lntup"])
     if not output or output.returncode:
         print("INFO  Listening socket audit not available")
         return
-    public, internal = set(), set()
+    try:
+        low, high = map(int, Path("/proc/sys/net/ipv4/ip_local_port_range")
+                        .read_text().split()[:2])
+    except (OSError, ValueError):
+        low, high = 32768, 60999
+
+    tcp_public, udp_public, internal = set(), set(), set()
     for line in output.stdout.splitlines():
         parts = line.split()
         if len(parts) < 5:
@@ -116,24 +123,46 @@ def ports():
             continue
         port = int(found.group(1))
         ip = address[:found.start()].strip("[]")
-        if ip in ("*", "0.0.0.0", "::"):
-            public.add((proto, address, port))
-        else:
+        is_public = ip in ("*", "0.0.0.0", "::")
+        if not is_public:
             try:
                 parsed = ipaddress.ip_address(ip.split("%", 1)[0])
                 if parsed.is_loopback:
                     continue
-                (internal if parsed.is_private else public).add((proto, address, port))
+                is_public = not parsed.is_private
             except ValueError:
-                internal.add((proto, address, port))
-    print("Public/wildcard sockets:", ", ".join(sorted({a + " " + b for a, b, _ in public})) or "none")
-    unexpected = sorted({a + "/" + str(p) for a, _, p in public if p not in (22, 80, 443)})
-    if unexpected:
-        print("REVIEW Unexpected public/wildcard ports:", ", ".join(unexpected))
+                is_public = False
+        if not is_public:
+            internal.add((proto, address, port))
+        elif proto.startswith("tcp"):
+            tcp_public.add((proto, address, port))
+        elif proto.startswith("udp"):
+            udp_public.add((proto, address, port))
+
+    print("TCP public/wildcard listeners:",
+          ", ".join(sorted({p + " " + a for p, a, _ in tcp_public})) or "none")
+    unexpected_tcp = sorted({p + "/" + str(port) for p, _, port in tcp_public
+                             if port not in (22, 80, 443)})
+    if unexpected_tcp:
+        print("REVIEW Unexpected TCP public/wildcard listeners:",
+              ", ".join(unexpected_tcp))
     else:
-        print("OK    No unexpected public/wildcard listeners (custom SSH may differ)")
+        print("OK    No unexpected public TCP listeners (custom SSH may differ)")
+
+    udp_standard = sorted({a for p, a, port in udp_public if port == 443})
+    udp_dynamic = {(p, a, port) for p, a, port in udp_public
+                   if low <= port <= high}
+    udp_other = sorted({p + "/" + str(port) for p, _, port in udp_public
+                        if port != 443 and not low <= port <= high})
+    print("UDP/443 sockets:", ", ".join(udp_standard) or "none")
+    if udp_dynamic:
+        print(f"INFO  {len(udp_dynamic)} UDP sockets in OS ephemeral range "
+              f"{low}-{high}; may be outbound traffic, not proven exposed listeners")
+    if udp_other:
+        print("REVIEW Other public/wildcard UDP sockets:", ", ".join(udp_other))
     if internal:
-        print("Private-interface sockets:", ", ".join(sorted({a + " " + b for a, b, _ in internal})))
+        print("Private-interface sockets:",
+              ", ".join(sorted({p + " " + a for p, a, _ in internal})))
     ufw = run(["ufw", "status"])
     if ufw and ufw.returncode == 0:
         first = ufw.stdout.splitlines()
