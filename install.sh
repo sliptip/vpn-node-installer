@@ -927,7 +927,6 @@ server {
     proxy_read_timeout 300s;
   }
   location = /health { default_type application/json; return 200 '{"status":"ok"}'; }
-  location = /version { default_type application/json; return 200 '{"service":"vpn-node","installer":"vpn-node-installer","version":"$VERSION"}'; }
   location = /robots.txt { default_type text/plain; return 200 "User-agent: *\nDisallow: /\n"; }
   location / { return 404; }
 }
