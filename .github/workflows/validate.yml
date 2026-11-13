@@ -35,6 +35,9 @@ jobs:
           sudo apt-get install -y shellcheck
           shellcheck --severity=error install.sh tools/remove-public-version.sh
 
+      - name: Audit helper syntax
+        run: python3 -m py_compile tools/audit-public-surface.py
+
       - name: Offline installer regression tests
         run: python3 -m unittest discover -s tests -v
 
