@@ -36,6 +36,19 @@ def state_values():
     return result
 
 
+def cert_domains(site):
+    """Read TLS SANs. This catches servers whose original DNS name is stale."""
+    match = re.search(r"^\s*ssl_certificate\s+([^;]+);", site, re.M)
+    if not match or "$" in match.group(1):
+        return []
+    result = run(["openssl", "x509", "-in", match.group(1).strip(),
+                  "-noout", "-ext", "subjectAltName"], timeout=8)
+    if result is None or result.returncode:
+        return []
+    return [name for name in re.findall(r"DNS:([A-Za-z0-9.-]+)", result.stdout)
+            if DOMAIN_RE.fullmatch(name)]
+
+
 def discover_site():
     site = CONFIG.read_text(encoding="utf-8", errors="replace") if CONFIG.exists() else ""
     state = state_values()
@@ -48,6 +61,13 @@ def discover_site():
                 break
     if not domain:
         domain = state.get("DOMAIN", "")
+    # A renamed host may still have an obsolete server_name/state domain.
+    # The active certificate's SAN is more reliable for choosing HTTPS SNI.
+    sans = cert_domains(site)
+    if not os.environ.get("VPN_AUDIT_DOMAIN") and sans and domain not in sans:
+        print("REVIEW configured domain", repr(domain),
+              "differs from TLS certificate; selecting", sans[0])
+        domain = sans[0]
     if not DOMAIN_RE.fullmatch(domain):
         raise ValueError("Could not discover domain. Set VPN_AUDIT_DOMAIN=example.org")
     panel = state.get("PANEL_PATH", "")
@@ -140,7 +160,8 @@ def main():
     print("OK   " if ngtest and ngtest.returncode == 0 else "REVIEW", "nginx -t")
     active = run(["nginx", "-T"], timeout=20)
     conf = active.stdout if active and active.returncode == 0 else site
-    if re.search(r"location\s*=\s*/version\s*\{", conf):
+    version_in_nginx = bool(re.search(r"location\s*=\s*/version\s*\{", conf))
+    if version_in_nginx:
         print("ALERT /version location in nginx configuration")
     else:
         print("OK    No explicit /version location")
@@ -156,7 +177,7 @@ def main():
             print("REVIEW Panel Basic Auth not verified in config")
 
     print("\n--- HTTP without authentication ---")
-    issues = 0
+    issues = 1 if version_in_nginx else 0
     targets = ["/", "/version", "/health", "/api/", "/metrics", "/debug",
                "/.env", "/server-status", "/swagger/", "/x-ui/", "/robots.txt"]
     if panel:
@@ -169,7 +190,9 @@ def main():
                 issues += 1
                 continue
             state, why = "OK   ", ""
-            if path == "/version" and code not in (404, 410):
+            if path == "/version" and version_in_nginx:
+                state, why = "ALERT", "nginx config has /version; HTTP result may be from stale SNI"
+            elif path == "/version" and code not in (404, 410):
                 state, why = "ALERT", "version route should return 404"
             elif path == "/health":
                 try:
