@@ -78,8 +78,8 @@ digest = hashlib.sha256(str(path).encode()).hexdigest()[:10]
 backup = backup_dir / (path.name + "." + digest + "." + stamp + ".bak")
 if backup.exists():
     sys.exit("Backup collision: " + str(backup))
+# Backup lives in a root-only directory; preserve original owner/mode for rollback.
 shutil.copy2(path, backup)
-backup.chmod(0o600)
 
 meta = path.stat()
 fd, temp_name = tempfile.mkstemp(prefix=".vpn-node-nginx-", dir=path.parent)
